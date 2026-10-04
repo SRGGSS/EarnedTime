@@ -24,7 +24,7 @@
         </activity>
 
         <service
-            android:name=".AccesoAccesibilidad"
+            android:name=".GestionUso"
             android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE"
             android:exported="false">
             <intent-filter>

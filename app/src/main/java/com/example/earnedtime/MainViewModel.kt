@@ -1,6 +1,7 @@
 package com.example.earnedtime
 
 import android.content.Context
+import android.util.Log
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
@@ -34,10 +35,27 @@ object BlockeoConfig {
         if (urlBarText.isNullOrEmpty()) return Pair(null, false)
         val normalized = urlBarText.lowercase()
 
-        val banned = domains.firstOrNull { it.banned && normalized.contains(it.domain) }
+        //Contiene
+        val contiene = domains.firstOrNull { normalized.contains(it.domain) }
+        if(contiene == null) return Pair(null, false)
+
+
+        //Más garantía que un simple contiene, es una parte completa (evita errores como x.com -> stockx.com)
+        val CharsDeInicio = listOf(".", "/", ":", "?", "#")
+
+        val inicio = normalized.indexOf(contiene.domain)
+
+        if(inicio != 0 && !CharsDeInicio.contains(normalized.get(inicio-1).toString())){
+            return Pair(null, false)
+        }
+
+        Log.d("TAG", "${inicio}  ${contiene.domain}")
+
+
+        val banned = domains.firstOrNull { it.banned && it.domain.equals(contiene.domain)}
         if (banned != null) return Pair(banned.domain, true)
 
-        val timed = domains.firstOrNull { !it.banned && normalized.contains(it.domain) }
+        val timed = domains.firstOrNull { !it.banned && it.domain.equals(contiene.domain)}
         return Pair(timed?.domain, false)
     }
 
