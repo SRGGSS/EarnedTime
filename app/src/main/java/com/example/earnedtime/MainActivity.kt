@@ -1,5 +1,6 @@
 package com.example.earnedtime
 
+import android.Manifest
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK
@@ -13,7 +14,9 @@ import android.os.Bundle
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -33,6 +36,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import com.example.earnedtime.data.AppEntry
 import com.example.earnedtime.data.DomainEntry
 import com.example.earnedtime.data.ObjetivoEntry
@@ -93,6 +97,13 @@ fun listarAppsInstaladas(context: Context): List<AppInstalada> {
         .filter { it.packageName != context.packageName } //Esta aplicación
         .sortedBy { it.nombre.lowercase() }
 }
+
+fun formatTime(totalSeconds: Long): String {
+    val horas = totalSeconds/3600
+    val minutes = (totalSeconds%3600) / 60
+    val seconds = totalSeconds % 60
+    return if(horas >0) if (minutes > 0) "${horas}hrs ${minutes}mins ${seconds}s" else "${horas}hrs ${seconds}s" else  if (minutes > 0) "${minutes}mins ${seconds}s" else "${seconds}s"
+}
 class MainActivity : ComponentActivity() {
 
     val viewModel = MainViewModel()
@@ -104,17 +115,11 @@ class MainActivity : ComponentActivity() {
 
     }
 
-    fun formatTime(totalSeconds: Long): String {
-        val horas = totalSeconds/3600
-        val minutes = (totalSeconds%3600) / 60
-        val seconds = totalSeconds % 60
-        return if(horas >0) if (minutes > 0) "${horas}h ${minutes}m ${seconds}s" else "${horas}h ${seconds}s" else  if (minutes > 0) "${minutes}m ${seconds}s" else "${seconds}s"
-    }
-
     override fun onCreate(savedInstanceState: Bundle?) {
 
         val context = this
         super.onCreate(savedInstanceState)
+
 
         setContent {
 
@@ -164,7 +169,8 @@ class MainActivity : ComponentActivity() {
                         } else {
                             PantallaSinPermiso(
                                 onAbrirAjustes = { openAccessibilitySettings() },
-                                onComprobar = { enabled = context.isAccessibilityServiceEnabled(GestionUso::class.java)
+                                onEnabled = {
+                                    enabled = true
                                 }
                             )
                         }
@@ -681,17 +687,42 @@ class MainActivity : ComponentActivity() {
 
 
     @Composable
-    fun PantallaSinPermiso(onAbrirAjustes: () -> Unit, onComprobar: () -> Unit) {
+    fun PantallaSinPermiso(onAbrirAjustes: () -> Unit, onEnabled: () -> Unit) {
         Column(
             modifier = Modifier.fillMaxSize().padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            val context = LocalContext.current
+
+            val permissionLauncher = rememberLauncherForActivityResult(     //https://developer.android.com/develop/ui/compose/notifications/notification-permission?hl=es-419
+                ActivityResultContracts.RequestPermission()
+            ) { isGranted ->
+                if (isGranted) {
+
+                } else {
+
+                }
+            }
+
+
             Text(text = "Para que el bloqueo funcione, activa el servicio de accesibilidad.")
             Spacer(modifier = Modifier.height(16.dp))
             Button(onClick = onAbrirAjustes) { Text("Abrir ajustes de accesibilidad") }
             Spacer(modifier = Modifier.height(8.dp))
-            TextButton(onClick = onComprobar) { Text("Comprobar de nuevo") }
+            TextButton(onClick =
+                {
+                    if(context.isAccessibilityServiceEnabled(GestionUso::class.java))
+                    {
+                        //En caso de que se haya concedido se pidel el resto de permisos
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        }
+
+                        onEnabled()
+                    }
+                }
+            ) { Text("Comprobar de nuevo") }
         }
     }
     fun Context.isAccessibilityServiceEnabled(service: Class<out AccessibilityService>): Boolean {

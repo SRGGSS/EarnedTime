@@ -21,6 +21,7 @@ import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.math.pow
 
 //Mapa de packetes y las IDs de su URL para los principales navegadores de android
 private val PackageAndID = mapOf(
@@ -57,6 +58,8 @@ private val PackageAndID = mapOf(
 fun todayKey(): String =  SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
 class GestionUso : AccessibilityService() {
 
+    val TiempoInicialNoti = 15 *60;
+    val NotiManager = NotificationManager() //Se enviarán notificaciones desde aquí
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val handler = Handler(Looper.getMainLooper())
     private val dao: mapDAO by lazy { AppDatabase.getDatabase(this).mapDAO() }
@@ -64,6 +67,8 @@ class GestionUso : AccessibilityService() {
     private var currentDomain: String? = null
     private var openTimestamp: Long = 0L
     private var pendingBlockRunnable: Runnable? = null
+
+    private var notificationRunnable: Runnable? = null
 
     private var dominiosCache: List<DomainEntry> = emptyList()
 
@@ -78,6 +83,7 @@ class GestionUso : AccessibilityService() {
     }
 
     override fun onServiceConnected() {
+
         super.onServiceConnected()
         ContextCompat.registerReceiver( //Registra detector de apagado
             this,
@@ -96,6 +102,12 @@ class GestionUso : AccessibilityService() {
                 appsCache = lista
             }
         }
+
+        if(!NotiManager.Iniciado)
+        {
+            NotiManager.createNotificationChannel(this)     //Se crea el canal de notificaciones
+        }
+
     }
 
     override fun onDestroy() {
@@ -217,11 +229,30 @@ class GestionUso : AccessibilityService() {
         val runnable = Runnable { blockNow(domain, elapsedSeconds = remainingSeconds, web) }
         pendingBlockRunnable = runnable
         handler.postDelayed(runnable, (remainingSeconds) * 1000)
+
+        if(remainingSeconds> TiempoInicialNoti) //Preparamos notificación uso a los 15 minutos
+        {
+            val notiRunnable = Runnable { notificationLoop( domain,0) }
+            notificationRunnable = notiRunnable
+            handler.postDelayed(notiRunnable, TiempoInicialNoti*1000L)
+        }
+    }
+
+    private fun notificationLoop(domain: String,iteracion: Int) {
+        val siguiente = TiempoInicialNoti*2.0.pow(iteracion).toInt()
+        NotiManager.PonerNotificacion(this, domain, (siguiente))
+
+        val notiRunnable = Runnable { notificationLoop( domain,iteracion+1) }
+        notificationRunnable = notiRunnable
+        handler.postDelayed(notiRunnable, siguiente.toLong()*1000)    //15m, 30m, 1h...
     }
 
     private fun cancelPendingBlock() {
-        pendingBlockRunnable?.let { handler.removeCallbacks(it) }
+        pendingBlockRunnable?.let { handler.removeCallbacks(it) }   //Quitamos temporizador bloqueo
         pendingBlockRunnable = null
+
+        notificationRunnable?.let { handler.removeCallbacks(it) }   //Quitamos temporizador notificación
+        notificationRunnable = null
     }
 
     private fun closeCurrentSession() {
@@ -238,7 +269,7 @@ class GestionUso : AccessibilityService() {
 
     private fun blockNow(domain: String, elapsedSeconds: Long, web: Boolean) {
         currentDomain = null
-        pendingBlockRunnable = null
+        cancelPendingBlock()
 
         val today = todayKey()
         serviceScope.launch { dao.persistUsage(domain, today, elapsedSeconds) }
