@@ -10,6 +10,39 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface mapDAO {
 
+    /**GRUPOS**/
+    @Query("SELECT * FROM grupo_entries")
+    fun getGrupos(): Flow<List<GrupoEntry>>
+
+    @Query("SELECT * FROM grupo_entries WHERE id = :ID ")
+    suspend fun getGrupo(ID: String): GrupoEntry?
+
+    @Query("DELETE FROM grupo_entries WHERE id = :id")      //No se debe llamar, solo se usa dentro de deleteGrupo()
+    suspend fun deleteGrupoEntr(id: String)
+
+    @Query("DELETE FROM dominio_entries WHERE grupo = :id")
+    suspend fun deleteDomainsOfGroup(id: String)
+    @Query("DELETE FROM app_entries WHERE grupo = :id")
+    suspend fun deleteAppsOfGroup(id: String)
+
+    suspend fun deleteGrupo(id: String) {
+        deleteDomainsOfGroup(id)
+        deleteAppsOfGroup(id)
+        deleteGrupoEntr(id)
+    }
+
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun setGrupo(grupo: GrupoEntry)
+
+
+    // Usos de hoy de los miembros del grupo, flow para sincronización
+    @Query("SELECT u.* FROM usage_entries u INNER JOIN (SELECT domain, MAX(date) AS maxDate FROM usage_entries GROUP BY domain) latest ON u.domain = latest.domain AND u.date = latest.maxDate WHERE u.date >= :d AND ( u.domain IN (SELECT domain FROM dominio_entries WHERE grupo = :i) OR u.domain IN (SELECT packageName FROM app_entries WHERE grupo = :i))")
+    fun getEntriesForGroup(i: String, d: String): Flow<List<UsageEntry>>
+
+    @Query("SELECT SUM(secondsUsed) FROM usage_entries WHERE date = :date AND (domain IN (SELECT domain FROM dominio_entries WHERE grupo = :id) OR domain IN (SELECT packageName FROM app_entries WHERE grupo = :id))") //Revisar: Hacer que coja la posterior, a partir de hoy, no siempre hoy
+    suspend fun getTotalSecondsForGroup(id: String, date: String): Long?
+
     /** APPS **/
     @Query("SELECT * FROM app_entries")
     fun getApps(): Flow<List<AppEntry>>
@@ -26,9 +59,10 @@ interface mapDAO {
     @Query("SELECT * FROM usage_entries WHERE domain = :domain ORDER BY date DESC LIMIT 1")
     suspend fun getEntry(domain: String): UsageEntry?
 
-    //Todos los dominios, mayor fecha a partir de x (normalmente la de hoy, en caso de que hayan usos con mayores fechas se utilizarán esos)
+    //Todos los usos, mayor fecha a partir de x (normalmente la de hoy, en caso de que hayan usos con mayores fechas se utilizarán esos)
     @Query("SELECT u.* FROM usage_entries u INNER JOIN (SELECT domain, MAX(date) AS maxDate FROM usage_entries GROUP BY domain) latest ON u.domain = latest.domain AND u.date = latest.maxDate WHERE u.date >= :d")
     fun getALL(d: String): Flow<List<UsageEntry>>
+
 
     @Query("SELECT SUM(secondsUsed) FROM usage_entries WHERE date = :date")
     suspend fun getTotalSecondsForDate(date: String): Long?
@@ -51,15 +85,6 @@ interface mapDAO {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun addDomain(entry: DomainEntry)
 
-    /** LÍMITE **/
-    @Query("SELECT * FROM LimiteTotal ORDER BY date DESC LIMIT 1")
-    suspend fun getLimite(): Limite?
-
-    @Query("UPDATE LimiteTotal SET LimiteSegundos = LimiteSegundos + :seconds")
-    suspend fun addSecondsLimite(seconds: Long)
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun setLimite(limite: Limite)
 
     /** OBJETIVOS **/
     @Query("SELECT * FROM objective_entries")
@@ -98,15 +123,13 @@ interface mapDAO {
     }
 
     //Si el último límite no es actual se resetea
-    suspend fun getOrResetLimite(): Long {
+    suspend fun getOrResetLimite(grupo: GrupoEntry): Long {
         val hoy = todayKey()
-        val actual = getLimite()
-        if (actual == null || actual.date < hoy) {
-            val nuevo = Limite(id = 0, LimiteSegundos = 30L * 60, date = hoy)
-            setLimite(nuevo)
-             return nuevo.LimiteSegundos
+        if (grupo.limite.date < hoy) {
+            val nuevo = grupo.copy(limite = grupo.limite.copy(LimiteActualSegs = grupo.limite.LimiteBaseSegs, date = hoy))
+            setGrupo(nuevo)
+            return nuevo.limite.LimiteActualSegs
         }
-
-        return actual.LimiteSegundos
+        return grupo.limite.LimiteActualSegs
     }
 }

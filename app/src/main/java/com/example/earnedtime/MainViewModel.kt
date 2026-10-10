@@ -12,9 +12,11 @@ import androidx.lifecycle.viewModelScope
 import com.example.earnedtime.data.AppDatabase
 import com.example.earnedtime.data.AppEntry
 import com.example.earnedtime.data.DomainEntry
+import com.example.earnedtime.data.GrupoEntry
 import com.example.earnedtime.data.Limite
 import com.example.earnedtime.data.ObjetivoEntry
 import com.example.earnedtime.data.UsageEntry
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 
@@ -28,16 +30,15 @@ import java.util.Calendar
 import java.util.Locale
 
 
-
 //Se encarga de comprobar si el dominio actual está controlado, devuelve el dominio controlado que le corresponde y si está baneado o no
 object BlockeoConfig {
-    fun matchDomain_Banned(urlBarText: String?, domains: List<DomainEntry>): Pair<String?, Boolean> {
-        if (urlBarText.isNullOrEmpty()) return Pair(null, false)
+    fun matchDomain(urlBarText: String?, domains: List<DomainEntry>): DomainEntry? {
+        if (urlBarText.isNullOrEmpty()) return null
         val normalized = urlBarText.lowercase()
 
         //Contiene
-        val contiene = domains.firstOrNull { normalized.contains(it.domain) }
-        if(contiene == null) return Pair(null, false)
+        val contiene = domains.firstOrNull { normalized.contains(it.domain) }       //Mejora Pendiente: prioridad, para evitar conflictos si múltiples coinciden
+        if(contiene == null) return null
 
 
         //Más garantía que un simple contiene, es una parte completa (evita errores como x.com -> stockx.com)
@@ -46,22 +47,16 @@ object BlockeoConfig {
         val inicio = normalized.indexOf(contiene.domain)
 
         if(inicio != 0 && !CharsDeInicio.contains(normalized.get(inicio-1).toString())){
-            return Pair(null, false)
+            return null
         }
 
-        Log.d("TAG", "${inicio}  ${contiene.domain}")
 
-
-        val banned = domains.firstOrNull { it.banned && it.domain.equals(contiene.domain)}
-        if (banned != null) return Pair(banned.domain, true)
-
-        val timed = domains.firstOrNull { !it.banned && it.domain.equals(contiene.domain)}
-        return Pair(timed?.domain, false)
+        return contiene
     }
 
-    fun matchApp_Banned(pkg: String, apps: List<AppEntry>): Pair<String?, Boolean> {
-        val entry = apps.firstOrNull { it.packageName == pkg } ?: return Pair(null, false)
-        return Pair(entry.packageName, entry.banned)
+    fun matchApp(pkg: String, apps: List<AppEntry>): AppEntry? {
+        val entry = apps.firstOrNull { it.packageName == pkg } ?: return null
+        return entry
     }
 }
 
@@ -130,10 +125,10 @@ class MainViewModel : ViewModel() {
     var objetivos by mutableStateOf<List<ObjetivoEntry>>(emptyList())
 
     var appsBloqueadas by mutableStateOf<List<AppEntry>>(emptyList())
+
+    var grupos by mutableStateOf<List<GrupoEntry>>(emptyList())
     var MapaApps = mutableMapOf<String, String>()
 
-    var limite by mutableLongStateOf(30L * 60)
-        private set
 
     private lateinit var context: Context
     fun Cargar(c: Context)
@@ -160,11 +155,6 @@ class MainViewModel : ViewModel() {
             }
         }
 
-
-        viewModelScope.launch {
-            limite = dao.getOrResetLimite()
-        }
-
         viewModelScope.launch {
             dao.getApps().collect { lista ->
                 appsBloqueadas = lista
@@ -173,6 +163,14 @@ class MainViewModel : ViewModel() {
                         MapaApps[it.packageName] = it.appLabel      //Se guarda nombre de app, para mostrar este al usuario
                     }
                 }
+            }
+        }
+
+        viewModelScope.launch {
+            val dao = AppDatabase.getDatabase(context).mapDAO()
+            dao.getGrupos().collect { lista ->
+                lista.forEach { dao.getOrResetLimite(it) }   // Para mantener la lista actualizada
+                grupos = lista
             }
         }
 
@@ -230,9 +228,22 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             val dao = AppDatabase.getDatabase(context).mapDAO()
             dao.setObjetivo(actualizado)
-            dao.addSecondsLimite(entry.TiempoExtra)
-            limite += entry.TiempoExtra
+
+            val grupo = dao.getGrupo(entry.grupo) ?: return@launch
+            dao.setGrupo(grupo.copy(limite = grupo.limite.copy(LimiteActualSegs = grupo.limite.LimiteActualSegs + entry.TiempoExtra)))  //Se actualiza el límite del grupo asociado
         }
     }
 
+
+    fun guardarGrupo(g: GrupoEntry) {
+        viewModelScope.launch { AppDatabase.getDatabase(context).mapDAO().setGrupo(g) }
+    }
+
+    fun eliminarGrupo(id: String) {
+        viewModelScope.launch { AppDatabase.getDatabase(context).mapDAO().deleteGrupo(id) }
+    }
+
+    fun usosDeGrupo(id: String): Flow<List<UsageEntry>> {
+        return AppDatabase.getDatabase(context).mapDAO().getEntriesForGroup(id, todayKey())
+    }
 }

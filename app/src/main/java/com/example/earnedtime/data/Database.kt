@@ -7,7 +7,7 @@ import androidx.room.RoomDatabase
 
 
 //https://medium.com/@anandgaur2207/room-database-in-android-d5f279d4648a
-@Database(entities = [UsageEntry::class, Limite::class, ObjetivoEntry::class, DomainEntry::class, AppEntry::class], version = 6, exportSchema = false)
+@Database(entities = [UsageEntry::class, ObjetivoEntry::class, DomainEntry::class, AppEntry::class, GrupoEntry::class], version = 9, exportSchema = false)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun mapDAO(): mapDAO
@@ -21,7 +21,7 @@ abstract class AppDatabase : RoomDatabase() {
                     context.applicationContext,
                     AppDatabase::class.java,
                     "earned_database"
-                ).build()       //No fallbackToDestructiveMigration, debe asegurarse persistencia entre actualizaciones
+                ).fallbackToDestructiveMigration().build()       //Para el futuro: quitar fallbackToDestructiveMigration() y hacer que se mantengan los datos, incluso al modificar su estrucutra
                 INSTANCE = instance
                 return instance
             }

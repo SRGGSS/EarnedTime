@@ -13,6 +13,7 @@ import androidx.core.content.ContextCompat
 import com.example.earnedtime.data.AppDatabase
 import com.example.earnedtime.data.AppEntry
 import com.example.earnedtime.data.DomainEntry
+import com.example.earnedtime.data.GrupoEntry
 import com.example.earnedtime.data.mapDAO
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -132,22 +133,27 @@ class GestionUso : AccessibilityService() {
             val activePkg = rootInActiveWindow?.packageName?.toString() ?: pkg
 
             if (!PackageAndID.contains(activePkg)) {  //No es una web
-                val matchedApp = BlockeoConfig.matchApp_Banned(activePkg, appsCache)
+                val matchedApp = BlockeoConfig.matchApp(activePkg, appsCache)
 
-                if (matchedApp.first == currentDomain) return   //Seguimos en la última
-
-                if (matchedApp.second) {    //Baneado
+                if(matchedApp==null || matchedApp.grupo.isBlank())  //Si no se ha encontrado un match en la list de apps limitadas
+                {
                     closeCurrentSession()
-                    currentDomain = matchedApp.first
-                    openTimestamp = System.currentTimeMillis()
-                    blockNow(matchedApp.first!!,0L,false)
                     return
                 }
 
-                closeCurrentSession()
-                if (matchedApp.first != null) {
-                    openSession(matchedApp.first!!, false)
+                if (matchedApp.packageName == currentDomain) return   //Seguimos en la misma
+
+                if (matchedApp.banned) {    //Baneado
+                    closeCurrentSession()
+                    currentDomain = matchedApp.packageName
+                    openTimestamp = System.currentTimeMillis()
+                    blockNow(matchedApp.packageName,0L,false)
+                    return
                 }
+
+                //Si es controlada, no baneada, empezamos a contar
+                openSession(matchedApp.packageName, false, matchedApp.grupo)
+
                 return
             }
         }
@@ -169,27 +175,31 @@ class GestionUso : AccessibilityService() {
             return
         }
 
-        val matchedDomain = BlockeoConfig.matchDomain_Banned(urlBarText, dominiosCache)
+        val matchedDomain = BlockeoConfig.matchDomain(urlBarText, dominiosCache)
 
-        if (matchedDomain.first == currentDomain) { //Seguimos en la última
-            return
-        }
-
-        if(matchedDomain.second)        //Baneada
+        if(matchedDomain == null || matchedDomain.grupo.isBlank())  //Si no se ha encontrado un match en la list de dominios limitados
         {
             closeCurrentSession()
-            currentDomain = matchedDomain.first
-            openTimestamp = System.currentTimeMillis()
-            blockNow(matchedDomain.first!!,0L,true)
             return
         }
 
-        // Ha cambiado, dejamos de contar
-        closeCurrentSession()
-
-        if (matchedDomain.first != null) {  //Si es controlada, no baneada, empezamos a contar
-            openSession(matchedDomain.first!!, true)
+        if (matchedDomain.domain == currentDomain) { //Seguimos en el mismo
+            return
         }
+
+        if(matchedDomain.banned)        //Baneada
+        {
+            closeCurrentSession()
+            currentDomain = matchedDomain.domain
+            openTimestamp = System.currentTimeMillis()
+            blockNow(matchedDomain.domain,0L,true)
+            return
+        }
+
+
+        //Si es controlado, no baneado, empezamos a contar
+        openSession(matchedDomain.domain, true, matchedDomain.grupo)
+
     }
 
     private fun readUrlBarText(ID_URL : String): String? {
@@ -200,25 +210,29 @@ class GestionUso : AccessibilityService() {
         return text
     }
 
-    private fun openSession(domain: String, web: Boolean) {
+    private fun openSession(domain: String, web: Boolean, idGrupo: String) {
         currentDomain = domain
         openTimestamp = System.currentTimeMillis()
 
         val today = todayKey()
 
         serviceScope.launch {
-
-            val totalUsedSoFar = dao.getTotalSecondsForDate(today) ?: 0L    //tiempo total hoy
-            val limite = dao.getOrResetLimite()
-            val remaining = limite - totalUsedSoFar
+            val grupo = dao.getGrupo(idGrupo)
+            if (grupo == null) {
+                handler.post { if (currentDomain == domain) currentDomain = null }
+                return@launch
+            }
+            val usado = dao.getTotalSecondsForGroup(idGrupo, today) ?: 0L
+            val remaining = dao.getOrResetLimite(grupo) - usado
 
             handler.post {
                 if (currentDomain != domain) return@post
 
                 if (remaining <= 0) {
-                    blockNow(domain,0L,web)
-                } else {
-                    scheduleBlock(domain, remaining, web)   //Temporizador
+                    blockNow(domain, 0L, web)
+                }
+                else {
+                    scheduleBlock(domain, remaining, web)
                 }
             }
         }

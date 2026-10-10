@@ -18,10 +18,14 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -30,29 +34,34 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.inset
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.toComposePathEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.earnedtime.data.AppEntry
 import com.example.earnedtime.data.DomainEntry
+import com.example.earnedtime.data.GrupoEntry
 import com.example.earnedtime.data.ObjetivoEntry
 import com.example.earnedtime.data.UsageEntry
+import com.example.earnedtime.ui.theme.EarnedTimeTheme
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.UUID
+import com.example.earnedtime.data.Limite
 
-//Mostrado en la lista
-data class ItemBloqueo(
-    val dominio: String,
-    val banned: Boolean,
-    val esApp: Boolean,
-    val domainEntry: DomainEntry? = null,
-    val appEntry: AppEntry? = null
-)
 
 data class AppInstalada(
     val packageName: String,
@@ -133,22 +142,30 @@ class MainActivity : ComponentActivity() {
             var pantallaActual by remember { mutableStateOf(Pantalla.Desglose) }    //Navegación entre 3 pantallas
 
 
-            MaterialTheme {
+            EarnedTimeTheme(dynamicColor = false) {
                 Scaffold(
                     bottomBar = {
                         if (enabled) {
                             NavigationBar(
-                                containerColor = Color(240,240,242)
+                                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+                                modifier = Modifier.height(76.dp),
+
                             ) {
                                 Pantalla.entries.forEach { pantalla ->
                                     NavigationBarItem(
                                         selected = pantallaActual == pantalla,
                                         onClick = { pantallaActual = pantalla },
-                                        icon = {Icon(
-                                            painter = painterResource(id = pantalla.icono),
-                                            contentDescription = pantalla.name,
-                                            modifier = Modifier.size(26.dp)
-                                        )}
+                                        icon = {
+                                            Icon(
+                                                painter = painterResource(id = pantalla.icono),
+                                                contentDescription = pantalla.name,
+                                                modifier = Modifier.size(29.dp),
+                                                tint = if (pantallaActual == pantalla) Color.LightGray else MaterialTheme.colorScheme.surface,
+                                            )
+                                        },
+                                        colors = NavigationBarItemDefaults.colors(
+                                            indicatorColor = Color.Transparent
+                                        )
                                     )
                                 }
                             }
@@ -158,13 +175,14 @@ class MainActivity : ComponentActivity() {
                     Surface(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(paddingValues)
+                            .padding(paddingValues),
+                        color = MaterialTheme.colorScheme.background
                     ) {
                         if (enabled) {
                             when (pantallaActual) {
                                 Pantalla.Objetivos -> PantallaObjetivos(viewModel.objetivos)
-                                Pantalla.Desglose -> PantallaDesglose(viewModel.dominios, viewModel.limite)
-                                Pantalla.Sitios -> PantallaDominios(viewModel.dominiosbloqueados, viewModel.appsBloqueadas)
+                                Pantalla.Desglose -> PantallaDesglose(viewModel.grupos)
+                                Pantalla.Sitios -> PantallaGrupos(viewModel.grupos, viewModel.dominiosbloqueados, viewModel.appsBloqueadas)
                             }
                         } else {
                             PantallaSinPermiso(
@@ -369,188 +387,356 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    val Colores = listOf(
+        Color(0xFF61aee8),
+        Color(0xFFeb3d46)
+    )
+
+
+
     @Composable
-    fun PantallaDesglose(dominios: List<UsageEntry>, limiteTotal: Long) {   //Desglose del consumo de tiempo
+    fun NotebookListCard(
+        headerTitle: String,
+        modifier: Modifier = Modifier,
+        color: Color,
+        grupo: GrupoEntry
+    ) {
+
+
+        val Usages by viewModel.usosDeGrupo(grupo.id).collectAsState(initial = emptyList())     //Pendiente: A lo mejor (?), no mostrar solo usos, si no dominios y su tiempo actual
+
+        if(Usages.isEmpty()) return
+
+
+        val totalGastado = Usages.sumOf { it.secondsUsed }
+        val limiteTotal = grupo.limite.LimiteActualSegs
+        val progressGlobal = (totalGastado.toFloat() / limiteTotal.toFloat()).coerceIn(0f, 1f)  //Porción consumida (0-1)
+
+        val TextoUso = formatTime(totalGastado)
+        val TextoLim = formatTime(limiteTotal)
+
+        // Contenedor principal
         Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.Center
+            modifier = modifier
+                .fillMaxWidth()
+                .shadow(
+                    elevation = 6.dp,
+                    shape = RoundedCornerShape(24.dp),
+                    clip = false
+                )
+                .drawWithCache {    //Iluminación arriba y bordes imperfectos
+
+
+                    val fade = blueFade(color, 15.dp.toPx())
+
+                    val wobblyEffect = android.graphics.DiscretePathEffect(20f, 1.5f).toComposePathEffect()
+
+                    val stroke = androidx.compose.ui.graphics.drawscope.Stroke(
+                        width = 7.dp.toPx(),
+                        pathEffect = wobblyEffect
+                    )
+
+                    onDrawWithContent {
+                        drawContent()
+                        drawRoundRect(
+                            brush = fade,
+                            style = stroke,
+                            cornerRadius = androidx.compose.ui.geometry.CornerRadius(24.dp.toPx())
+                        )
+                    }
+                }
+                .clip(RoundedCornerShape(24.dp))
         ) {
+            // Cabecera
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .drawBehind { drawRect(blueFade(color, 15.dp.toPx())) }
+                    .padding(vertical = 4.dp, horizontal = 24.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally
+                )
+                {
+                    Text(
+                        text = headerTitle,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 24.sp
+                    )
 
-                // Calculamos el total gastado sumando todos los dominios
-                val totalGastado = dominios.sumOf { it.secondsUsed }
-                val progressGlobal = (totalGastado.toFloat() / limiteTotal.toFloat()).coerceIn(0f, 1f)
+                    Spacer(modifier = Modifier.height(5.dp))
 
-                val TextoUso = formatTime(totalGastado)
-                val TextoLim = formatTime(limiteTotal)
-
-                Column(modifier = Modifier.fillMaxWidth()) {
-
-                    // Límite global
-                    Card(
-                        modifier = Modifier.fillMaxWidth(),
-                        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-                    ) {
-                        Column(
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(),
+                        contentAlignment = Alignment.Center
+                    ){
+                        LinearProgressIndicator(
+                            progress = { progressGlobal },
+                            drawStopIndicator = {},
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .padding(16.dp)
-                        ) {
-                            Text(
-                                text = "Tiempo Total Gastado",
-                                style = MaterialTheme.typography.titleLarge
-                            )
+                                .height(11.dp),
 
-                            Spacer(modifier = Modifier.height(12.dp))
+                            color = MaterialTheme.colorScheme.onSurface,
+                            trackColor = color,
+                            gapSize = 0.dp,
+                        )
 
-                            LinearProgressIndicator(
-                                progress = { progressGlobal },
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height(12.dp), //Ajustar grosor
-                                color = if (progressGlobal >= 1f) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                                trackColor = MaterialTheme.colorScheme.surfaceVariant,
-                            )
+                        LinearProgressIndicator(        //Sirve como track de la linea de progreso real. Utilizar solo track color en la original no daba el resultado esperado
+                            progress = { 0f },
+                            drawStopIndicator = {}, //Para quitar el punto final
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(11.dp),
 
-                            Spacer(modifier = Modifier.height(8.dp))
-
-                            Text(
-                                text = "Has gastado $TextoUso de $TextoLim",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
+                            color = Color.White.copy(alpha = 0.15f),
+                            trackColor = Color.White.copy(alpha = 0.15f),
+                            gapSize = 0.dp,
+                        )
 
 
-                            Spacer(modifier = Modifier.height(26.dp))
-
-
-                            LazyColumn(
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                items(dominios) { entry ->
-
-                                    Row(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                                        horizontalArrangement = Arrangement.SpaceBetween,
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        val nombre = viewModel.MapaApps[entry.domain] ?: entry.domain   //Traduce el dominio de la aplicacion a esta
-                                        Text(
-                                            text = nombre,
-                                            style = MaterialTheme.typography.bodyLarge
-                                        )
-                                        Text(
-                                            text = formatTime(entry.secondsUsed),
-                                            style = MaterialTheme.typography.bodyLarge,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                    }
-                                }
-
-                            }
-                        }
                     }
 
+                    //Subtitulo
+                    Text(
+                        text = "Has gastado $TextoUso de $TextoLim",
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 16.sp
+                    )
 
-
+                    Spacer(modifier = Modifier.height(3.dp))
                 }
 
+            }
+
+            // Listado
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.onSurface)
+                    .drawWithCache {
+
+                        val wobblyEffect = android.graphics.DiscretePathEffect(20f, 1.5f).toComposePathEffect()
+
+                        val stroke = androidx.compose.ui.graphics.drawscope.Stroke( //Mismo efecto desde el espacio de listado de dentro
+                            width = 8.dp.toPx(),
+                            pathEffect = wobblyEffect
+                        )
+
+                        onDrawWithContent {
+                            drawContent()
+
+                            drawRoundRect(
+                                color = color,
+                                style = stroke,
+                                cornerRadius = androidx.compose.ui.geometry.CornerRadius(14.dp.toPx())
+                            )
+                        }
+                    }
+                    .padding(horizontal = 24.dp)
+            ) {
+                Spacer(modifier = Modifier.height(6.dp))
 
 
+                Usages.forEachIndexed { index, usage ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 10.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween
+
+                    ) {
+
+                        val nombre = viewModel.MapaApps[usage.domain] ?: usage.domain   //Traduce el dominio de la aplicacion a esta
+
+
+                        Text(
+                            text = nombre,
+                            color = Color.DarkGray,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 16.sp
+                        )
+
+                        Text(
+                            text = formatTime(usage.secondsUsed),   //Mirar si es preferible otro formato
+                            color = Color.Gray,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 13.sp
+                        )
+                    }
+                    // Línea separadora
+                    if (index < Usages.size - 1) {
+                        HorizontalDivider(
+                            thickness = 1.dp,
+                            color = Color.LightGray
+                        )
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(6.dp))
+            }
+        }
+    }
+    @Composable
+    fun PantallaDesglose(grupos: List<GrupoEntry>) {   //Desglose del consumo de tiempo
+
+        Card(
+            modifier = Modifier
+                .padding(24.dp)
+                .clip(RoundedCornerShape(24.dp)),
+            colors = CardDefaults.cardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHighest,
+            )
+        ) {
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(20.dp)
+            )
+            {
+                itemsIndexed(grupos) { index, item ->
+
+                NotebookListCard(
+                        headerTitle = "Registro de Tareas",
+                        color = Colores.get(index%Colores.size),    //Bucle, reinicia una vez llega al fondo de los colores
+                        grupo = item
+                    )
+
+                }
+            }
         }
     }
 
 
+    fun blueFade(base: Color, fadeEnd: Float) = Brush.verticalGradient(
+        0f to lerp(base, Color.White, 0.25f),   // Más claro arriba.
+        1f to base,                              // El resto tiene el color sólido.
+        startY = 0f,
+        endY = fadeEnd
+    )
+
 
     @Composable
-    fun PantallaDominios(dominios: List<DomainEntry>, apps: List<AppEntry>) {   //Seleccion de Dominios controlados
+    fun PantallaGrupos(grupos: List<GrupoEntry>, dominios: List<DomainEntry>, apps: List<AppEntry>) {
+        var grupoEditando by remember { mutableStateOf<GrupoEntry?>(null) }
+        var mostrarDialogoGrupo by remember { mutableStateOf(false) }
+        var grupoAnadirId by remember { mutableStateOf<String?>(null) }   // grupo al que se añade un miembro
         var mostrarElegirTipo by remember { mutableStateOf(false) }
         var mostrarDialogoDominio by remember { mutableStateOf(false) }
         var mostrarSelectorApps by remember { mutableStateOf(false) }
-        var dominioEditando by remember { mutableStateOf<DomainEntry?>(null) }
-
-        val items = remember(dominios, apps) {  //Se juntan aplicaciones y webs
-            dominios.map { ItemBloqueo(it.domain, it.banned, false, domainEntry = it) } +
-                    apps.map { ItemBloqueo(it.appLabel, it.banned, true, appEntry = it) }
-        }
-
-
-        //Se dividen entre baneados y no baneados
-        val noBaneados = items.filter { !it.banned }.sortedBy { it.dominio.lowercase() }
-        val baneados = items.filter { it.banned }.sortedBy { it.dominio.lowercase() }
 
         Box(modifier = Modifier.fillMaxSize()) {
-            if (items.isEmpty()) {
+            if (grupos.isEmpty()) {
                 Text(
-                    text = "No tienes sitios ni apps limitados. Pulsa + para añadir uno.",
+                    text = "No tienes ningún grupo. Pulsa + para crear uno.",
                     modifier = Modifier.align(Alignment.Center).padding(24.dp)
                 )
             }
 
-            LazyColumn(
+            LazyColumn( //Listado de grupos
                 modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
-                contentPadding = PaddingValues(vertical = 8.dp)
+                contentPadding = PaddingValues(top = 8.dp, bottom = 88.dp)
             ) {
-                item {
-                    Text(
-                        text = "Temporizados",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(vertical = 8.dp)
-                    )
-                }
-                items(noBaneados, key = { (if (it.esApp) "app:" else "web:") + it.dominio }) { item ->
-                    FilaItemBloqueo(
-                        item = item,
-                        onToggleBanned = { nuevoValor ->
-                            if (item.esApp) viewModel.guardarApp(item.appEntry!!.copy(banned = nuevoValor))
-                            else viewModel.guardarDominio(item.domainEntry!!.copy(banned = nuevoValor))
-                        },
-                        onEliminar = {
-                            if (item.esApp) viewModel.eliminarApp(item.appEntry!!.packageName)
-                            else viewModel.eliminarDominio(item.domainEntry!!.domain)
-                        }
-                    )
-                }
+                items(grupos, key = { it.id }) { grupo ->
 
-                item {
-                    HorizontalDivider(
-                        modifier = Modifier.padding(vertical = 12.dp),
-                        thickness = 2.dp,
-                        color = MaterialTheme.colorScheme.outlineVariant
-                    )
-                    Text(
-                        text = "Baneados",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.error,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-                }
-                items(baneados, key = { (if (it.esApp) "app:" else "web:") + it.dominio + "_b" }) { item ->
-                    FilaItemBloqueo(
-                        item = item,
-                        onToggleBanned = { nuevoValor ->
-                            if (item.esApp) viewModel.guardarApp(item.appEntry!!.copy(banned = nuevoValor))
-                            else viewModel.guardarDominio(item.domainEntry!!.copy(banned = nuevoValor))
-                        },
-                        onEliminar = {
-                            if (item.esApp) viewModel.eliminarApp(item.appEntry!!.packageName)
-                            else viewModel.eliminarDominio(item.domainEntry!!.domain)
+                    val webs = dominios.filter { it.grupo == grupo.id }.sortedBy { it.domain }
+                    val appsGrupo = apps.filter { it.grupo == grupo.id }.sortedBy { it.appLabel.lowercase() }
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
+                    ) {
+                        Column(modifier = Modifier.padding(16.dp))
+                        {
+                            Row(verticalAlignment = Alignment.CenterVertically)
+                            {
+
+                                Column(modifier = Modifier.weight(1f))
+                                {
+                                    Text(
+                                        text = grupo.nombre,
+                                        style = MaterialTheme.typography.titleMedium
+                                    )
+
+                                    Text(
+                                        text= "Límite diario: ${formatTime(grupo.limite.LimiteBaseSegs)}",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                                    )
+                                }
+                                IconButton(onClick = { grupoEditando = grupo; mostrarDialogoGrupo = true }) {
+                                    Icon(Icons.Default.Edit, contentDescription = "Editar grupo")
+                                }
+                                IconButton(onClick = { viewModel.eliminarGrupo(grupo.id) }) {
+                                    Icon(Icons.Default.Delete, contentDescription = "Eliminar grupo")
+                                }
+                            }
+
+                            webs.forEach { web ->
+                                FilaMiembro(
+                                    nombre = web.domain,
+                                    tipo = "Web",
+                                    onEliminar = {viewModel.eliminarDominio(web.domain)}
+                                )
+
+                            }
+
+                            appsGrupo.forEach { app ->
+                                FilaMiembro(
+                                    nombre = app.appLabel,
+                                    tipo = "App",
+                                    onEliminar = {viewModel.eliminarApp(app.packageName)}
+                                )
+                            }
+
+                            TextButton(
+                                onClick = {
+                                    grupoAnadirId = grupo.id
+                                    mostrarElegirTipo = true
+                                }
+                            )
+                            {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = "Añadir a grupo",
+                                    modifier = Modifier.size(18.dp)
+                                )
+
+                                Spacer(modifier = Modifier.width(4.dp))
+
+                                Text(text = "Añadir web o app")
+                            }
                         }
-                    )
+                    }
                 }
             }
 
             FloatingActionButton(
-                onClick = { mostrarElegirTipo = true },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(16.dp)
+                onClick = { grupoEditando = null; mostrarDialogoGrupo = true },
+                modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(16.dp)
             ) {
-                Icon(Icons.Default.Add, contentDescription = "Añadir")
+                Icon(Icons.Default.Add, contentDescription = "Añadir grupo")
             }
+        }
+
+        if (mostrarDialogoGrupo) {
+            DialogoGrupo(
+                grupo = grupoEditando,
+                onGuardar = {
+                    viewModel.guardarGrupo(it)
+                    mostrarDialogoGrupo = false },
+
+                onCancelar = { mostrarDialogoGrupo = false }
+            )
         }
 
         if (mostrarElegirTipo) {
@@ -564,11 +750,7 @@ class MainActivity : ComponentActivity() {
         if (mostrarDialogoDominio) {
             DialogoDominio(
                 onGuardar = { entry ->
-                    val original = dominioEditando
-                    if (original != null && original.domain != entry.domain) {
-                        viewModel.eliminarDominio(original.domain)  //Se elimina el antiguo, en caso de que se haya editado
-                    }
-                    viewModel.guardarDominio(entry)
+                    grupoAnadirId?.let { viewModel.guardarDominio(entry.copy(grupo = it)) }
                     mostrarDialogoDominio = false
                 },
                 onCancelar = { mostrarDialogoDominio = false }
@@ -577,14 +759,96 @@ class MainActivity : ComponentActivity() {
 
         if (mostrarSelectorApps) {
             SelectorDeApps(
-                yaAgregadas = apps.map { it.packageName }.toSet(),
+                yaAgregadas = apps.map { it.packageName }.toSet(),   // una app solo puede estar en un grupo
                 onSeleccionar = { app ->
-                    viewModel.guardarApp(AppEntry(app.packageName, app.nombre, banned = false))
+                    grupoAnadirId?.let {
+                        viewModel.guardarApp(AppEntry(app.packageName, app.nombre, grupo = it))
+                    }
                     mostrarSelectorApps = false
                 },
                 onCancelar = { mostrarSelectorApps = false }
             )
         }
+    }
+
+    @Composable
+    fun FilaMiembro(nombre: String, tipo: String, onEliminar: () -> Unit) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text= nombre,
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 4.dp)
+            )
+            Text(
+                text = tipo,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            IconButton(
+                onClick = onEliminar,
+                modifier = Modifier.size(36.dp)
+            ) {
+                Icon(Icons.Default.Delete, contentDescription = "Quitar", modifier = Modifier.size(18.dp))
+            }
+        }
+    }
+
+    @Composable
+    fun DialogoGrupo(grupo: GrupoEntry?, onGuardar: (GrupoEntry) -> Unit, onCancelar: () -> Unit) {
+
+        var nombre by remember { mutableStateOf(grupo?.nombre ?: "") }
+        var minutos by remember { mutableStateOf(((grupo?.limite?.LimiteBaseSegs ?: 1800L) / 60).toString()) }
+
+        AlertDialog(
+            onDismissRequest = onCancelar,
+            title = { Text(if (grupo == null) "Nuevo grupo" else "Editar grupo") },
+            text = {
+                Column {
+                    OutlinedTextField(
+                        value = nombre, onValueChange = { nombre = it },
+                        label = { Text("Nombre") }, modifier = Modifier.fillMaxWidth()
+                    )
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    OutlinedTextField(
+                        value = minutos,
+                        onValueChange = { minutos = it.filter { c -> c.isDigit() } },
+                        label = { Text("Límite diario (minutos)") },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+
+                    val base = (minutos.toLongOrNull() ?: 0L) * 60
+
+                    if (nombre.isNotBlank() && base > 0) {
+
+                        // en caso de que ya hubiera extra de hoy
+                        val extra = grupo?.let { it.limite.LimiteActualSegs } ?: base
+
+                        onGuardar(
+                            GrupoEntry(
+                                id = grupo?.id ?: UUID.randomUUID().toString(),
+                                nombre = nombre.trim(),
+                                limite = Limite(
+                                    LimiteBaseSegs = base,
+                                    LimiteActualSegs = extra,
+                                    date = grupo?.limite?.date ?: todayKey()
+                                )
+                            )
+                        )
+                    }
+                }) { Text("Guardar") }
+            },
+            dismissButton = { TextButton(onClick = onCancelar) { Text("Cancelar") } }
+        )
     }
 
 
@@ -756,37 +1020,5 @@ class MainActivity : ComponentActivity() {
     }
 
 
-    @Composable
-    fun FilaItemBloqueo(
-        item: ItemBloqueo,
-        onToggleBanned: (Boolean) -> Unit,
-        onEliminar: () -> Unit
-    ) {
-        Card(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-            elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 6.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = item.dominio,
-                    modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
-                    style = MaterialTheme.typography.bodyMedium
-                )
-                Text(
-                    text = if (item.esApp) "App" else "Web",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 6.dp)
-                )
-                Switch(checked = item.banned, onCheckedChange = onToggleBanned)
 
-                IconButton(onClick = onEliminar, modifier = Modifier.size(36.dp)) {
-                    Icon(Icons.Default.Delete, contentDescription = "Eliminar", modifier = Modifier.size(20.dp))
-                }
-            }
-        }
-    }
 }
