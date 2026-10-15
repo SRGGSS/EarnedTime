@@ -15,7 +15,7 @@ data class UsageEntry(
 data class DomainEntry(
     val domain: String,
     val banned: Boolean = false,
-    var grupo: String = ""     //id del grupo al que pertenece
+    var grupo: Int = 1     //id del grupo al que pertenece
 )
 
 data class Limite(
@@ -35,7 +35,7 @@ data class ObjetivoEntry(
     val usoSemanal: Int,
     val dateCompletado: String,
     val fechaLimite: String = "",
-    var grupo: String = ""
+    var grupo: Int
 )
 
 @Entity(tableName = "app_entries", primaryKeys = ["packageName"])
@@ -43,12 +43,12 @@ data class AppEntry(
     val packageName: String,
     val appLabel: String,
     val banned: Boolean = false,
-    var grupo: String = ""     //id del grupo al que pertenece
+    var grupo: Int     //id del grupo al que pertenece
 )
 
 @Entity(tableName = "grupo_entries", primaryKeys = ["id"])
 data class GrupoEntry(
-    val id: String,
+    val id: Int,
     val nombre: String,
     @Embedded(prefix = "limite_") var limite: Limite,   //Aplana la tabla
 )

@@ -15,17 +15,17 @@ interface mapDAO {
     fun getGrupos(): Flow<List<GrupoEntry>>
 
     @Query("SELECT * FROM grupo_entries WHERE id = :ID ")
-    suspend fun getGrupo(ID: String): GrupoEntry?
+    suspend fun getGrupo(ID: Int): GrupoEntry?
 
     @Query("DELETE FROM grupo_entries WHERE id = :id")      //No se debe llamar, solo se usa dentro de deleteGrupo()
-    suspend fun deleteGrupoEntr(id: String)
+    suspend fun deleteGrupoEntr(id: Int)
 
     @Query("DELETE FROM dominio_entries WHERE grupo = :id")
-    suspend fun deleteDomainsOfGroup(id: String)
+    suspend fun deleteDomainsOfGroup(id: Int)
     @Query("DELETE FROM app_entries WHERE grupo = :id")
-    suspend fun deleteAppsOfGroup(id: String)
+    suspend fun deleteAppsOfGroup(id: Int)
 
-    suspend fun deleteGrupo(id: String) {
+    suspend fun deleteGrupo(id: Int) {
         deleteDomainsOfGroup(id)
         deleteAppsOfGroup(id)
         deleteGrupoEntr(id)
@@ -38,10 +38,10 @@ interface mapDAO {
 
     // Usos de hoy de los miembros del grupo, flow para sincronización
     @Query("SELECT u.* FROM usage_entries u INNER JOIN (SELECT domain, MAX(date) AS maxDate FROM usage_entries GROUP BY domain) latest ON u.domain = latest.domain AND u.date = latest.maxDate WHERE u.date >= :d AND ( u.domain IN (SELECT domain FROM dominio_entries WHERE grupo = :i) OR u.domain IN (SELECT packageName FROM app_entries WHERE grupo = :i))")
-    fun getEntriesForGroup(i: String, d: String): Flow<List<UsageEntry>>
+    fun getEntriesForGroup(i: Int, d: String): Flow<List<UsageEntry>>
 
     @Query("SELECT SUM(secondsUsed) FROM usage_entries WHERE date = :date AND (domain IN (SELECT domain FROM dominio_entries WHERE grupo = :id) OR domain IN (SELECT packageName FROM app_entries WHERE grupo = :id))") //Revisar: Hacer que coja la posterior, a partir de hoy, no siempre hoy
-    suspend fun getTotalSecondsForGroup(id: String, date: String): Long?
+    suspend fun getTotalSecondsForGroup(id: Int, date: String): Long?
 
     /** APPS **/
     @Query("SELECT * FROM app_entries")

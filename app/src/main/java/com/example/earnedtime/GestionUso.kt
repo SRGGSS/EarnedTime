@@ -135,7 +135,7 @@ class GestionUso : AccessibilityService() {
             if (!PackageAndID.contains(activePkg)) {  //No es una web
                 val matchedApp = BlockeoConfig.matchApp(activePkg, appsCache)
 
-                if(matchedApp==null || matchedApp.grupo.isBlank())  //Si no se ha encontrado un match en la list de apps limitadas
+                if(matchedApp==null)  //Si no se ha encontrado un match en la list de apps limitadas
                 {
                     closeCurrentSession()
                     return
@@ -177,7 +177,7 @@ class GestionUso : AccessibilityService() {
 
         val matchedDomain = BlockeoConfig.matchDomain(urlBarText, dominiosCache)
 
-        if(matchedDomain == null || matchedDomain.grupo.isBlank())  //Si no se ha encontrado un match en la list de dominios limitados
+        if(matchedDomain == null)  //Si no se ha encontrado un match en la list de dominios limitados
         {
             closeCurrentSession()
             return
@@ -210,7 +210,7 @@ class GestionUso : AccessibilityService() {
         return text
     }
 
-    private fun openSession(domain: String, web: Boolean, idGrupo: String) {
+    private fun openSession(domain: String, web: Boolean, idGrupo: Int) {
         currentDomain = domain
         openTimestamp = System.currentTimeMillis()
 

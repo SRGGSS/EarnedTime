@@ -239,11 +239,17 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch { AppDatabase.getDatabase(context).mapDAO().setGrupo(g) }
     }
 
-    fun eliminarGrupo(id: String) {
+    fun getGrupo(id: Int): GrupoEntry?{
+        var grupo: GrupoEntry? = null
+        viewModelScope.launch { grupo = AppDatabase.getDatabase(context).mapDAO().getGrupo(id) }
+        return grupo
+    }
+
+    fun eliminarGrupo(id: Int) {
         viewModelScope.launch { AppDatabase.getDatabase(context).mapDAO().deleteGrupo(id) }
     }
 
-    fun usosDeGrupo(id: String): Flow<List<UsageEntry>> {
+    fun usosDeGrupo(id: Int): Flow<List<UsageEntry>> {
         return AppDatabase.getDatabase(context).mapDAO().getEntriesForGroup(id, todayKey())
     }
 }
