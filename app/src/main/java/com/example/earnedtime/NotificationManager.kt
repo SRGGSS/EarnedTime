@@ -16,20 +16,24 @@ import android.app.NotificationManager
 
 val CHANNEL_ID: String = "com.chikeandroid.tutsplustalerts.ANDROID"
 
-class NotificationManager {
+object NotificationManager {
 
     var Iniciado = false;
 
-    fun PonerNotificacion(context: Context, dominio: String, tiempo: Int) {
+    fun PonerNotificacion(context: Context, titulo: String, texto: String) {
+
+        if(!Iniciado)
+        {
+            createNotificationChannel(context)
+            Iniciado = true
+        }
 
         //https://developer.android.com/develop/ui/compose/notifications/create-notification?hl=es-419
-        val textTitle = "Uso de  ${dominio}"
-        val TiempoString = formatTime(tiempo.toLong())
-        val textContent = "Has utilizado ${dominio} durante ${TiempoString.subSequence(0,TiempoString.length-5)}"
+
         val builder = NotificationCompat.Builder(context, CHANNEL_ID)
              .setSmallIcon(R.drawable.ajustes)
-             .setContentTitle(textTitle)
-             .setContentText(textContent)
+             .setContentTitle(titulo)
+             .setContentText(texto)
              .setPriority(NotificationCompat.PRIORITY_DEFAULT)
 
         with(NotificationManagerCompat.from(context)) {
@@ -42,7 +46,6 @@ class NotificationManager {
             }
 
             notify(1, builder.build())  //Prueba con notificationId 1, reemplazará el último
-            Iniciado=true
         }
     }
 

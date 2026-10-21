@@ -4,10 +4,12 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.TypeConverters
 
 
 //https://medium.com/@anandgaur2207/room-database-in-android-d5f279d4648a
-@Database(entities = [UsageEntry::class, ObjetivoEntry::class, DomainEntry::class, AppEntry::class, GrupoEntry::class], version = 10, exportSchema = false)
+@Database(entities = [UsageEntry::class, ObjetivoEntry::class, DomainEntry::class, AppEntry::class, GrupoEntry::class, PausaEntry::class], version = 12, exportSchema = false)
+@TypeConverters(Convertidores::class)
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun mapDAO(): mapDAO

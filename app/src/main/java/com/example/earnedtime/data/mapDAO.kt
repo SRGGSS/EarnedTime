@@ -10,6 +10,26 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface mapDAO {
 
+    /**PAUSAS**/
+    @Query("SELECT * FROM pausa_entries")
+    fun getPausas(): Flow<List<PausaEntry>>
+
+    @Query("SELECT * FROM pausa_entries")
+    suspend fun getPausasSingular(): List<PausaEntry>
+
+    @Query("SELECT * FROM pausa_entries WHERE id = :ID ")
+    suspend fun getPausa(ID: String): PausaEntry?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun setPausa(p: PausaEntry)
+
+    @Query("DELETE FROM pausa_entries WHERE id = :id")
+    suspend fun deletePausa(id: String)
+
+    // Las puntuales ya terminadas
+    @Query("DELETE FROM pausa_entries WHERE programada = 0 AND inicioMillis + duracionMins * 60000 < :ahora")
+    suspend fun limpiarPausasCaducadas(ahora: Long)
+
     /**GRUPOS**/
     @Query("SELECT * FROM grupo_entries")
     fun getGrupos(): Flow<List<GrupoEntry>>

@@ -1,8 +1,11 @@
 package com.example.earnedtime
 
 import android.Manifest
+import kotlinx.coroutines.launch
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK
+import android.app.AlarmManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -11,6 +14,8 @@ import android.graphics.Canvas
 import android.graphics.drawable.Drawable
 import android.os.Build
 import android.os.Bundle
+import android.os.CountDownTimer
+import android.os.SystemClock
 import android.provider.Settings
 import android.view.accessibility.AccessibilityManager
 import androidx.activity.ComponentActivity
@@ -18,54 +23,82 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.DateRange
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.dropShadow
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.draw.scale
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.addOutline
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.graphics.shadow.Shadow
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpOffset
+import androidx.compose.ui.unit.DpSize
+import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.commandiron.wheel_picker_compose.WheelTimePicker
+import com.commandiron.wheel_picker_compose.core.WheelPickerDefaults
 import com.example.earnedtime.data.AppEntry
 import com.example.earnedtime.data.DomainEntry
 import com.example.earnedtime.data.GrupoEntry
 import com.example.earnedtime.data.Limite
 import com.example.earnedtime.data.ObjetivoEntry
+import com.example.earnedtime.data.PausaEntry
 import com.example.earnedtime.ui.theme.EarnedTimeTheme
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
-import java.security.AccessController.getContext
+import java.time.LocalTime
 import java.util.UUID
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.nanoseconds
+import kotlin.time.DurationUnit
 
 
 data class AppInstalada(
@@ -123,12 +156,15 @@ class MainActivity : ComponentActivity() {
 
     enum class Pantalla(val icono: Int) {
         Sitios( R.drawable.ajustes),
-        Desglose( R.drawable.lista),
+        Home( R.drawable.casa),
         Objetivos( R.drawable.tareas)
 
     }
 
     var apps by mutableStateOf<List<AppInstalada>>(emptyList())
+
+    var mostrarPausa by  mutableStateOf(false)
+
 
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -149,7 +185,7 @@ class MainActivity : ComponentActivity() {
 
             var enabled by remember { mutableStateOf(context.isAccessibilityServiceEnabled(GestionUso::class.java)
             ) } //Permisos concedidos
-            var pantallaActual by remember { mutableStateOf(Pantalla.Desglose) }    //Navegación entre 3 pantallas
+            var pantallaActual by remember { mutableStateOf(Pantalla.Home) }    //Navegación entre 3 pantallas
 
 
             EarnedTimeTheme(dynamicColor = false) {
@@ -215,7 +251,7 @@ class MainActivity : ComponentActivity() {
                             if (enabled) {
                                 when (pantallaActual) {
                                     Pantalla.Objetivos -> PantallaObjetivos(viewModel.objetivos)
-                                    Pantalla.Desglose -> PantallaDesglose(viewModel.grupos)
+                                    Pantalla.Home -> if(mostrarPausa) PantallaPausa() else PantallaDesglose(viewModel.grupos)
                                     Pantalla.Sitios -> PantallaGrupos(viewModel.grupos, viewModel.dominiosbloqueados, viewModel.appsBloqueadas)
                                 }
                             } else {
@@ -318,14 +354,14 @@ class MainActivity : ComponentActivity() {
                 .size(36.dp)
                 .clip(CircleShape)
                 .clickable(enabled = !bloqueado, onClick = onClick)
-                .background(Color.Gray.copy(alpha = 0.4f*opacidad))
+                .background(Color.Gray.copy(alpha = 0.4f * opacidad))
                 .drawBehind {
                     val grosor = 2.dp.toPx()
                     val topLeft = Offset(grosor / 2, grosor / 2)
                     val tam = Size(size.width - grosor, size.height - grosor)
                     // pista
                     drawArc(
-                        Color.Gray.copy(alpha = opacidad) ,
+                        Color.Gray.copy(alpha = opacidad),
                         0f,
                         360f,
                         false,
@@ -501,7 +537,7 @@ class MainActivity : ComponentActivity() {
                         ) {
                             grupos.forEach { g ->
                                 DropdownMenuItem(
-                                    text = { Text(g.nombre, color = lerp(Colores[g.id % Colores.size], Color.White, 0.8f)) },
+                                    text = { Text(g.nombre, color = lerp(ColorGrupos(g.id), Color.White, 0.8f)) },
                                     onClick = { grupoId = g.id; selectorAbierto = false }
                                 )
                             }
@@ -840,9 +876,76 @@ class MainActivity : ComponentActivity() {
             }
         }
     }
+    
+    fun ColorGrupos(id: Int): Color //Devuelve color perteneciente a grupo en base a su id
+    {
+        return Colores[id % Colores.size]
+    }
+
+
+    @OptIn(ExperimentalLayoutApi::class)
+    @Composable
+    fun SelectorGrupos(     //Selector de grupos, scrolleable horizontalmente
+        seleccionados: List<Int>,
+        onCambio: (List<Int>) -> Unit
+    ) {
+        val grupos = viewModel.grupos
+
+        if (grupos.isEmpty()) {
+            Text("Crea primero un grupo", color = Color.Gray, modifier = Modifier.fillMaxWidth(), textAlign = TextAlign.Center)
+            return
+        }
+
+        LazyRow(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            items(grupos) { g ->
+                val color = ColorGrupos(g.id)
+                val elegido = g.id in seleccionados
+
+                Surface(
+                    onClick = {
+                        onCambio(   //Se selecciona o deselecciona
+                            if (elegido) seleccionados - g.id
+                            else seleccionados + g.id
+                        )
+                    },
+                    shape = RoundedCornerShape(24),
+                    color = if (elegido) Color.White.copy(alpha = 0.2f) else Color.White.copy(alpha = 0.1f),
+                    border = BorderStroke(1.dp, lerp(color, Color.White, 0.25f))
+                ) {
+                    Row(
+                        modifier = Modifier.padding(
+                            horizontal = 12.dp,
+                            vertical = 8.dp
+                        ),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        if (elegido) {
+                            Icon(
+                                imageVector = Icons.Default.Check,
+                                contentDescription = "elegido",
+                                modifier = Modifier.size(16.dp),
+                                tint = Color.White
+                            )
+                        }
+
+                        Text(
+                            text = g.nombre,
+                            color = Color.White
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     @Composable
     fun PantallaDesglose(grupos: List<GrupoEntry>) {   //Desglose del consumo de tiempo
 
+        Box(modifier = Modifier.fillMaxSize()) {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize(),
                     contentPadding = PaddingValues(horizontal = 32.dp, vertical = 40.dp), // deja sitio a la sombra
@@ -857,9 +960,904 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
+            FloatingActionButton(   //Botón para acceder al menú de pausa
+                onClick = { mostrarPausa =true },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(horizontal = 16.dp, vertical = 24.dp)
+                    .dropShadow(
+                        shape = CircleShape,
+                        shadow = Shadow(
+                            radius = 7.dp,
+                            spread = 1.dp,
+                            color = Color.White.copy(alpha = 0.2f),
+                            offset = DpOffset(0.dp, 0.dp)
+                        )
+                    )
+                    .border(2.dp, color = Color.Black, CircleShape)
+                    .clip(CircleShape),
+                containerColor = Color.White
+            ) {
+                Icon(painterResource(R.drawable.reloj), contentDescription = "Añadir grupo", Modifier.size(38.dp), tint = Color.Black)
+            }
+        }
 
     }
 
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    @Composable
+    fun PantallaPausa() {
+
+        val context = LocalContext.current
+
+        var MenuProgramar by remember {mutableStateOf(false)}
+
+        // Default con 00:00
+        var timePickerState by remember { mutableStateOf(LocalTime.MIDNIGHT) }
+
+
+        var Notificar by remember {mutableStateOf(true)}
+
+        var pausaSeleccionada by remember {
+            mutableStateOf<PausaEntry?>(null)
+        }
+
+        Box(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(24.dp)
+            ) {
+                    Row(modifier = Modifier.fillMaxWidth())
+                    {
+                        IconButton(     //Atrás
+                            modifier = Modifier
+                                .size(36.dp),
+                            onClick = { mostrarPausa = false }) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Atrás",
+                                tint = Color.White
+                            )
+                        }
+
+                        Text(
+                            text = if(MenuProgramar) "Programar" else "Pausar",
+                            color = Color.White,
+                            style = MaterialTheme.typography.headlineMedium,
+                            fontWeight = FontWeight.Bold,
+                            textAlign = TextAlign.Center,
+                            modifier = Modifier.fillMaxWidth().weight(1f)
+                        )
+
+                        FilledIconButton(   //Cambiar entre menús pausa momentanea y pausa programada
+                            onClick = { MenuProgramar = !MenuProgramar },
+                            modifier = Modifier
+                                .size(36.dp),
+                            shape = RoundedCornerShape(10.dp),
+                            colors = IconButtonDefaults.iconButtonColors(containerColor = Color.White)
+                        ) {
+                            Icon(
+                                if(!MenuProgramar) Icons.Default.DateRange else Icons.Default.Lock,
+                                contentDescription = "Programar",
+                                tint = Color.Black,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                    }
+
+
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                Column(modifier = Modifier.weight(1f)) {
+
+                    var pausaEspontanea by remember {
+                        mutableStateOf<PausaEntry?>(null)
+                    }
+
+                    LaunchedEffect(Unit) {
+                        pausaEspontanea = viewModel.pausasEspontaneas()
+                    }
+
+
+
+
+                    if (MenuProgramar) {       //Menú programación pausas, se repiten cada semana
+
+                        var gruposElegidos by remember { mutableStateOf<List<Int>>(emptyList()) }
+
+                        Column(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalArrangement = Arrangement.spacedBy(20.dp)
+                        ) {
+
+                            AgendaSemanal(
+                                pausas = viewModel.pausas.filter { it.programada },
+                                onPulsar = { pausa -> pausaSeleccionada = pausa}
+                            )
+
+
+                            //Selector dias de la semana
+                            var diasElegidos by remember { mutableStateOf(setOf<Int>()) }
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(
+                                    space = 8.dp,
+                                    alignment = Alignment.CenterHorizontally
+                                ),
+                            )
+                            {
+                                val dias = listOf("L", "M", "X", "J", "V", "S", "D")
+
+                                for (n in 0..dias.size - 1) {
+                                    val dia = n + 1
+                                    Box(contentAlignment = Alignment.Center)
+                                    {
+                                        Surface(
+                                            onClick = {
+                                                if(diasElegidos.contains(dia)) diasElegidos -= dia
+                                                else diasElegidos += dia
+                                                      },
+                                            modifier = Modifier.size(34.dp),
+                                            shape = CircleShape,
+                                            color = if (diasElegidos.contains(dia)) Color.White.copy(alpha = 0.2f) else Color.Transparent,
+                                            border = BorderStroke(1.dp, Color.White)
+                                        ) {
+                                            Box(
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = dias[n],
+                                                    color = Color.White
+                                                )
+                                            }
+                                        }
+
+                                    }
+
+                                }
+                            }
+
+
+                            //Selector hora inicio y duración (2 WheelTimePickers)
+                            var inicio by remember { mutableStateOf(LocalTime.of(12, 0)) }
+                            var duracion by remember { mutableStateOf(LocalTime.MIDNIGHT) }
+
+                            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+                                val ancho = maxWidth / 2 - 8.dp
+                                Row(
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("Inicio", color = Color.Gray, fontSize = 13.sp)
+                                        WheelTimePicker(
+                                            startTime = inicio,
+                                            textColor = Color.White,
+                                            textStyle = TextStyle(fontSize = 18.sp),
+                                            selectorProperties = WheelPickerDefaults.selectorProperties(
+                                                enabled = true,
+                                                shape = RoundedCornerShape(24.dp),
+                                                color = Color.Transparent,
+                                                border = BorderStroke(1.dp, Color.Transparent)
+                                            ),
+                                            size = DpSize(ancho, 90.dp)
+                                        ) { inicio = it }
+                                    }
+
+                                    Spacer(Modifier.weight(1f))
+
+                                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Text("Duración", color = Color.Gray, fontSize = 13.sp)
+                                        WheelTimePicker(
+                                            startTime = duracion,
+                                            textColor = Color.White,
+                                            textStyle = TextStyle(fontSize = 18.sp),
+                                            selectorProperties = WheelPickerDefaults.selectorProperties(
+                                                enabled = true,
+                                                shape = RoundedCornerShape(24.dp),
+                                                color = Color.Transparent,
+                                                border = BorderStroke(1.dp, Color.Transparent)
+                                            ),
+                                            size = DpSize(ancho, 90.dp)
+                                        ) { duracion = it }
+                                    }
+                                }
+                            }
+
+
+                            SelectorGrupos(seleccionados = gruposElegidos, onCambio = { gruposElegidos = it })
+
+
+                            Row(modifier = Modifier.fillMaxWidth())
+                            {
+                                Spacer(modifier = Modifier.weight(1f))
+                                Button(
+                                    enabled = diasElegidos.size > 0 && gruposElegidos.isNotEmpty() && (duracion.hour > 0 || duracion.minute > 0),
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color.White,
+                                        contentColor = Color.Black,
+                                        disabledContainerColor = Color.Gray,
+                                        disabledContentColor = Color.DarkGray
+                                    ),
+                                    onClick = {
+
+                                        viewModel.nuevaPausa(
+                                            PausaEntry(
+                                                id = UUID.randomUUID().toString(),
+                                                grupos = gruposElegidos,
+                                                duracionMins = duracion.hour * 60 + duracion.minute,
+                                                programada = true,
+                                                diasSem = diasElegidos.sorted(),      // 1 = lunes ... 7 = domingo
+                                                progInicioMins = inicio.hour * 60 + inicio.minute
+                                            )
+                                        )
+
+                                        diasElegidos = emptySet()  // limpia el formulario
+                                        gruposElegidos = emptyList()
+                                    }
+                                ) { Text("Agregar", fontWeight = FontWeight.Bold) }
+                            }
+
+
+                        }
+                        if(pausaSeleccionada != null)
+                        {
+                            DialogoPausaProgramada(pausaSeleccionada!!, {pausaSeleccionada = null}, OnEliminar = {viewModel.eliminarPausa(pausaSeleccionada!!.id); pausaSeleccionada = null})
+                        }
+                    }
+
+
+
+
+
+
+
+
+                    else    //Pausa Momentanea
+                    {
+                        if (pausaEspontanea != null) {  //Pausa Momentanea puesta, countdown
+                            var textoReloj by remember { mutableStateOf("") }
+                            var pausaAhora = pausaEspontanea!!
+                            var menuCancelar by remember { mutableStateOf(false) }
+                            val finMillis = pausaAhora.inicioMillis + pausaAhora.duracionMins * 60_000L
+                            var progreso by remember { mutableFloatStateOf(((System.currentTimeMillis() - pausaAhora!!.inicioMillis).toDouble() / (pausaAhora.duracionMins * 60_000L)).toFloat()) }
+
+
+                            DisposableEffect(pausaAhora.id) {
+                                val restante = (finMillis - System.currentTimeMillis()).coerceAtLeast(1L)
+                                val timer = object : CountDownTimer(restante + 1000, 1000) {    //https://stackoverflow.com/questions/54095875/how-to-create-a-simple-countdown-timer-in-kotlin
+                                    override fun onTick(millisUntilFinished: Long) {
+                                        progreso = ((System.currentTimeMillis() - pausaAhora.inicioMillis).toDouble() / (pausaAhora.duracionMins * 60_000L)).toFloat()
+                                        val Quedan = (finMillis - System.currentTimeMillis()).milliseconds
+                                        textoReloj = Quedan.toComponents { hrs, min, sec, nanos -> String.format("%d:%02d:%02d", hrs, min, sec)} //https://www.baeldung.com/kotlin/duration-class-tutorial, mejor que Locale.getDefault, funciona independientemente de franja horaria
+                                    }
+
+                                    override fun onFinish() {
+                                        pausaEspontanea = viewModel.pausasEspontaneas()
+                                    }
+                                }
+                                timer.start()
+                                onDispose { timer.cancel() }
+                            }
+
+
+
+                            Column(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            )
+                            {
+                                Spacer(modifier = Modifier.weight(1f))
+                                Box(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    contentAlignment = Alignment.Center
+                                )
+                                {
+                                    CircularProgressIndicator(  //Cirucumferencia, muestra cuanto queda de la pausa
+                                        progress = { 1f - progreso },
+                                        Modifier
+                                            .size(180.dp, 180.dp)
+                                            .scale(scaleX = -1f, scaleY = 1f),
+                                        color = Color.White,
+                                        gapSize = 0.dp,
+                                        strokeWidth = 14.dp,
+                                        trackColor = Color.White.copy(alpha = 0.15f)
+                                    )
+
+                                    Text(
+                                        text = textoReloj,
+                                        fontSize = 24.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color.White
+                                    )
+
+                                }
+
+                                Spacer(modifier = Modifier.weight(1f))
+
+                                LazyRow(    //Muestra todos los grupos de la pausa, reutilizado más adelante, considerar si lo meto en un Composable
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    items(viewModel.gruposDePausa(pausaAhora.id)) { g ->
+                                        val color = ColorGrupos(g.id)
+
+                                        Surface(
+                                            shape = RoundedCornerShape(24),
+                                            color = Color.White.copy(alpha = 0.1f),
+                                            border = BorderStroke(
+                                                1.dp,
+                                                lerp(color, Color.White, 0.25f)
+                                            )
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(
+                                                    horizontal = 12.dp,
+                                                    vertical = 8.dp
+                                                ),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                            ) {
+                                                Text(
+                                                    text = g.nombre,
+                                                    color = Color.White
+                                                )
+                                            }
+                                        }
+
+                                    }
+                                }
+
+                                Spacer(modifier = Modifier.weight(0.5f))
+
+                                Row(modifier = Modifier.fillMaxWidth())
+                                {
+                                    Spacer(modifier = Modifier.weight(1f))
+
+                                    Button(
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                                        colors = ButtonColors(
+                                            containerColor = Color(0xFFde1212),
+                                            contentColor = Color(0xFFde1212),
+                                            disabledContainerColor = Color.Gray,
+                                            disabledContentColor = Color.Gray
+                                        ),
+                                        onClick = {
+                                            menuCancelar = true
+                                        }
+                                    ) { Text("Cancelar", color = Color.White) }
+                                }
+
+
+                            }
+
+                            if(menuCancelar)
+                            {
+                                DialogoCancelarPausa(
+                                    onCancelar =
+                                        {
+                                            menuCancelar=false
+                                        },
+                                    onCancelada =
+                                        {
+                                            viewModel.eliminarPausa(pausaAhora.id)
+                                            pausaEspontanea = viewModel.pausasEspontaneas()
+                                            pausaEspontanea = null
+                                            menuCancelar=false
+
+
+
+                                            //Eliminar notificación, por si había una pendiente https://developer.android.com/develop/background-work/services/alarms?hl=es-419&utm_source=android-studio-app&utm_medium=app
+                                            val alarmManager = context.getSystemService(ALARM_SERVICE) as AlarmManager
+
+                                            val intent = Intent(context, AlarmaReceiver::class.java)
+
+                                            val pendingIntent = PendingIntent.getBroadcast(context, 1, intent, PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE)
+
+                                            if (pendingIntent != null) {
+                                                alarmManager.cancel(pendingIntent)
+                                            }
+
+                                        }
+                                )
+                            }
+
+                        }
+
+
+
+
+
+
+
+
+                        else {        //Menú crear pausa momentanea
+
+                            var gruposElegidos by remember { mutableStateOf<List<Int>>(emptyList()) }
+
+                            Spacer(modifier = Modifier.weight(1f))
+
+                            BoxWithConstraints(
+                                modifier = Modifier.fillMaxWidth(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                WheelTimePicker(
+                                    startTime = timePickerState,
+                                    textColor = Color.White,
+                                    textStyle = TextStyle(fontSize = 26.sp),
+                                    selectorProperties = WheelPickerDefaults.selectorProperties(
+                                        enabled = true,
+                                        shape = RoundedCornerShape(24.dp),
+                                        color = Color.Transparent,
+                                        border = BorderStroke(1.dp, Color.Transparent)
+                                    ),
+                                    size = DpSize(maxWidth * (3f / 4f), 200.dp),
+                                ) { snappedTime -> timePickerState = snappedTime }
+
+                            }
+
+                            Spacer(modifier = Modifier.weight(1f))
+
+
+                            SelectorGrupos(seleccionados = gruposElegidos, onCambio = { gruposElegidos = it })
+
+                            Spacer(modifier = Modifier.weight(1f))
+
+
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                Arrangement.SpaceBetween,
+
+                            )
+                            {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Checkbox(
+                                        checked = Notificar,
+                                        onCheckedChange = { Notificar = it },
+                                        colors = CheckboxDefaults.colors(
+                                            checkedColor = Color.White,
+                                            checkmarkColor = Color.Black,
+                                            uncheckedColor = Color.White,
+
+                                            ),
+
+                                        )
+
+                                    Text(
+                                        text = "Enviar notificación",
+                                        color = Color.White
+                                    )
+                                }
+
+                                var enabled = gruposElegidos.isNotEmpty() && (timePickerState.minute>0 || timePickerState.hour>0)
+
+                                Button(
+                                    contentPadding = PaddingValues(horizontal = 16.dp, vertical = 0.dp),
+                                    colors = ButtonColors(
+                                        containerColor = Color.White,
+                                        contentColor = Color.White,
+                                        disabledContainerColor = Color.Gray,
+                                        disabledContentColor = Color.Gray
+                                    ),
+                                    enabled = enabled,
+                                    onClick = {
+
+                                        val pausa = PausaEntry(
+                                            id = UUID.randomUUID().toString(),
+                                            grupos = gruposElegidos,
+                                            duracionMins = timePickerState.hour * 60 + timePickerState.minute,
+                                            inicioMillis = System.currentTimeMillis()
+                                        )
+                                        viewModel.nuevaPausa(pausa)
+
+                                        pausaEspontanea = pausa
+
+                                        if(Notificar)
+                                        {
+                                            val tiempoEnSegs = (timePickerState.hour * 60 + timePickerState.minute) * 60
+                                            val alarmManager = context.getSystemService(ALARM_SERVICE) as AlarmManager //https://developer.android.com/develop/background-work/services/alarms?hl=es-419
+
+                                            val intent = Intent(context, AlarmaReceiver::class.java).apply {
+                                                putExtra("titulo", "Fin de la pausa")
+                                                putExtra("texto", "La pausa de ${formatTime(tiempoEnSegs.toLong())} ha finalizado!")
+                                            }
+
+                                            val pendingIntent = PendingIntent.getBroadcast(
+                                                context,
+                                                1,
+                                                intent,
+                                                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                                            )
+
+
+                                            alarmManager?.set(
+                                                AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                                                SystemClock.elapsedRealtime() + tiempoEnSegs * 1000,
+                                                pendingIntent
+                                            )
+
+                                        }
+
+                                    }
+                                ) { Text("Aceptar", color = Color.Black, fontWeight = FontWeight.Bold) }
+
+                            }
+
+                        }
+                    }
+
+
+
+                }
+
+            }
+        }
+    }
+
+    @Composable
+    fun AgendaSemanal(pausas: List<PausaEntry>, onPulsar: (PausaEntry) -> Unit) {
+        val dias = listOf("L", "M", "X", "J", "V", "S", "D")
+        val alturaHora = 10.dp
+
+
+        val porDia = remember(pausas) {
+            val mapa = (1..7).associateWith { mutableListOf<Triple<PausaEntry, Int, Int>>() }
+            pausas.forEach { p ->
+                p.diasSem.forEach { d ->
+                    val ini = p.progInicioMins
+                    val fin = ini + p.duracionMins
+                    if (fin <= 1440) mapa[d]!!.add(Triple(p, ini, fin))
+                    else {
+                        mapa[d]!!.add(Triple(p, ini, 1440))
+                        mapa[d % 7 + 1]!!.add(Triple(p, 0, fin - 1440))
+                    }
+                }
+            }
+            mapa
+        }
+
+        Column(modifier = Modifier.fillMaxWidth()) {
+            // Cabecera con los días
+            Row(modifier = Modifier.fillMaxWidth()) {
+                Spacer(modifier = Modifier.width(28.dp))
+                dias.forEach {
+                    Text(
+                        modifier = Modifier.weight(1f),
+                        text = it,
+                        color = Color.White,
+                        fontWeight = FontWeight.SemiBold,
+                        textAlign = TextAlign.Center,
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(6.dp))
+
+            // Columna de horas
+            Row(modifier = Modifier.fillMaxWidth().height(alturaHora * 24)) {
+                Box(modifier = Modifier.width(18.dp).fillMaxHeight()) {
+                    listOf(0, 6, 12, 18).forEach { h ->
+                        Text(
+                            modifier = Modifier.offset( 0.dp, alturaHora * h - 10.dp),
+                            text = "%02d".format(h),
+                            color = Color.Gray,
+                            fontSize = 10.sp
+                        )
+                    }
+                }
+
+                // Columnas de los 7 días
+                Row(modifier = Modifier
+                        .weight(1f)
+                        .fillMaxHeight()
+                        .drawBehind {   // líneas cada 6 h
+                            listOf(6, 12, 18).forEach { h ->
+                                drawLine(Color.White.copy(alpha = 0.12f), Offset(0f, size.height * h/ 24f), Offset(size.width, size.height * h/ 24f), 1f)
+                            }
+                        }
+                ) {
+                    for (d in 1..7) {
+                        Box(
+                            modifier = Modifier
+                                .weight(1f)
+                                .fillMaxHeight()
+                                .border(0.5.dp, Color.White.copy(alpha = 0.15f))
+                        ) {
+                            porDia[d]!!.forEach { (p, ini, fin) ->
+                                val g = viewModel.grupos.firstOrNull { it.id in p.grupos }
+
+                                if(g==null)
+                                {
+                                    return@forEach
+                                }
+
+                                val color = ColorGrupos(g.id )
+
+                                Box(
+                                    modifier = Modifier
+
+                                        .offset(y = alturaHora * (ini / 60f))
+                                        .border(1.dp, color, RoundedCornerShape(4.dp))
+                                        .height(alturaHora * ((fin - ini) / 60f))
+                                        .fillMaxWidth()
+                                        .clip(RoundedCornerShape(4.dp))
+                                        .background(lerp(color, Color.White, 0.8f))
+                                        .clickable { onPulsar(p) }
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Spacer(Modifier.size(18.dp))
+            }
+        }
+    }
+
+    @Composable
+    fun DialogoPausaProgramada(pausa: PausaEntry, onCancelar: () -> Unit, OnEliminar: () -> Unit)  {
+
+        AlertDialog(
+            containerColor = Color.Black,
+            modifier = Modifier
+                .border(2.dp, Color.White, RoundedCornerShape(24.dp))
+                .dropShadow(
+                    shape = RoundedCornerShape(24.dp),
+                    shadow = Shadow(
+                        radius = 14.dp,
+                        spread = 1.dp,
+                        color = Color.White.copy(alpha = 0.4f),
+                        offset = DpOffset(0.dp, 0.dp)
+                    )
+                ),
+            onDismissRequest = onCancelar,
+            title = {
+                        Box(
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                text = "Pausa Programada",
+                                modifier = Modifier.align(Alignment.Center),
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+
+                            IconButton(
+                                onClick = { OnEliminar() },
+                                modifier = Modifier.align(Alignment.CenterEnd)
+                            ) {
+                                Icon(
+                                    Icons.Default.Delete,
+                                    contentDescription = "Eliminar",
+                                    tint = Color.White
+                                )
+                            }
+                        }
+                    },
+            text = {
+
+                val dias = listOf("L", "M", "X", "J", "V", "S", "D")
+
+                val ini = pausa.progInicioMins
+                val fin = (ini + pausa.duracionMins) % 1440
+
+                val horario = "%02d:%02d - %02d:%02d".format(ini / 60, ini % 60, fin / 60, fin % 60)
+
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(16.dp)
+                )
+                {
+
+                    //Visualizador grupos, reutilizado, tengo que crear Composable
+                    LazyRow(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(viewModel.gruposDePausa(pausa.id)) { g ->
+                            val color = ColorGrupos(g.id)
+
+                            Surface(
+                                shape = RoundedCornerShape(24),
+                                color = Color.White.copy(alpha = 0.1f),
+                                border = BorderStroke(
+                                    1.dp,
+                                    lerp(color, Color.White, 0.25f)
+                                )
+                            ) {
+                                Row(
+                                    modifier = Modifier.padding(
+                                        horizontal = 12.dp,
+                                        vertical = 8.dp
+                                    ),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                ) {
+                                    Text(
+                                        text = g.nombre,
+                                        color = Color.White
+                                    )
+                                }
+                            }
+
+                        }
+                    }
+
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                    ) {
+                        dias.forEachIndexed { n, letra ->
+                            val activo = (n + 1) in pausa.diasSem   // +1 porque se guardan de 0 a 6
+                            Surface(
+                                modifier = Modifier.size(30.dp),
+                                shape = CircleShape,
+                                color = if (activo) Color.White else Color.Transparent,
+                                border = BorderStroke(1.dp,  if (activo) Color.Black else Color.Gray)
+                            ) {
+                                Box(contentAlignment = Alignment.Center) {
+                                    Text(
+                                        text = letra,
+                                        fontSize = 13.sp,
+                                        color = if (activo) Color.Black else Color.Gray)
+                                }
+                            }
+                        }
+                    }
+
+                    // Horas
+                    Text(
+                        modifier = Modifier.fillMaxWidth(),
+                        text = horario,
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        textAlign = TextAlign.Center,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Text(
+                        modifier = Modifier.fillMaxWidth(),
+                        text = "Duración: ${pausa.duracionMins / 60}h ${pausa.duracionMins % 60}min",
+                        color = Color.Gray,
+                        fontSize = 13.sp,
+                        textAlign = TextAlign.Center
+                    )
+                }
+
+            },
+            confirmButton = { },
+            dismissButton = { TextButton(onClick = onCancelar) { Text("Cancelar", color = Color.White) } }
+        )
+    }
+
+
+    @Composable
+    fun DialogoCancelarPausa(onCancelar: () -> Unit, onCancelada: () -> Unit) {
+
+        AlertDialog(
+            containerColor = Color.Black,
+            modifier = Modifier
+                .border(2.dp, Color.White, RoundedCornerShape(24.dp))
+                .dropShadow(
+                    shape = RoundedCornerShape(24.dp),
+                    shadow = Shadow(
+                        radius = 14.dp,
+                        spread = 1.dp,
+                        color = Color.White.copy(alpha = 0.4f),
+                        offset = DpOffset(0.dp, 0.dp)
+                    )
+                ),
+            onDismissRequest = onCancelar,
+            title = { Text("Cancelar Pausa") },
+            text = {
+
+                Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally)
+                {
+                    Spacer(modifier = Modifier.size(22.dp))
+                    BotónCancelar("Mantener",onProgressComplete = {onCancelada()})
+                }
+
+            },
+            confirmButton = { },
+            dismissButton = { TextButton(onClick = onCancelar) { Text("Cancelar", color = Color.White) } }
+        )
+    }
+
+    @Composable
+    fun BotónCancelar(  //Mantener durante x segundos, animación de: https://proandroiddev.com/creating-an-engaging-progress-button-in-jetpack-compose-29ff8d5e383c
+        text: String,
+        progressDurationMillis: Float = 5f,
+        onProgressComplete: () -> Unit = {}
+    ) {
+
+        var progress by remember {mutableFloatStateOf(0f)}
+
+
+
+        val density = LocalDensity.current
+        val layoutDirection = LayoutDirection.Ltr
+
+
+        val defaultButtonClipShape = CircleShape
+
+
+        Button(
+            onClick = {},
+            modifier = Modifier
+                .height(IntrinsicSize.Max)
+                .border(1.dp, Color.White, shape = RoundedCornerShape(24.dp))
+                .onTouchHeld({ valor -> progress = valor.coerceIn(0f, 1f)}, progressDurationMillis, {onProgressComplete()})
+                .drawBehind {
+
+                    val outline = defaultButtonClipShape.createOutline(
+                        this.size,
+                        layoutDirection,
+                        density
+                    )
+                    val buttonShapePath = Path().apply { addOutline(outline) }
+
+
+                    clipPath(buttonShapePath) {
+                        drawRect(
+                            color = lerp(Color(0xFF7d0a0a), Color(0xFFde1212), progress),
+                            size = Size(
+                                width = this.size.width * progress,
+                                height = this.size.height
+                            )
+                        )
+                    }
+                },
+            colors = ButtonDefaults.buttonColors(
+                containerColor = Color.Transparent,
+                contentColor = Color.Transparent
+            ),
+            shape = CircleShape
+        ) {
+            Text(
+                text = text,
+                color = Color.White
+            )
+        }
+    }
+
+
+    fun Modifier.onTouchHeld(       //https://proandroiddev.com/creating-touch-held-down-modifer-with-jetpack-compose-a01081f51edf
+        onTouchHeld: (timeElapsed: Float) -> Unit,
+        duracionMaxima : Float,
+        onFinished: () -> Unit
+    ) = composed {
+        val scope = rememberCoroutineScope()
+        pointerInput(onTouchHeld) {
+            awaitEachGesture {
+                val initialDown = awaitFirstDown(requireUnconsumed = false)
+                val initialDownTime = System.nanoTime()
+                val initialTouchHeldJob = scope.launch {
+                    while (initialDown.pressed) {
+                        val timeElapsed = System.nanoTime() - initialDownTime
+                        val timeEl = timeElapsed.nanoseconds.toLong(DurationUnit.MILLISECONDS) / (duracionMaxima * 1000f)
+                        onTouchHeld(timeEl)   //Modificación: Devuelve de 0 a 1 el progreso cada 0,1 segundos
+                        delay(timeMillis = 25)
+                        if(timeEl>=1)
+                        {
+                            onFinished()
+                        }
+                    }
+
+                }
+                waitForUpOrCancellation()
+                onTouchHeld(0f)
+                initialTouchHeldJob.cancel()
+            }
+        }
+    }
 
 
     @Composable
@@ -1262,12 +2260,13 @@ class MainActivity : ComponentActivity() {
             val context = LocalContext.current
 
             val permissionLauncher = rememberLauncherForActivityResult(     //https://developer.android.com/develop/ui/compose/notifications/notification-permission?hl=es-419
-                ActivityResultContracts.RequestPermission()
-            ) { isGranted ->
-                if (isGranted) {
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { permissionsResult -> permissionsResult.forEach { (permission, isGranted) ->
+                    if (isGranted) {
 
-                } else {
+                    } else {
 
+                    }
                 }
             }
 
@@ -1288,8 +2287,23 @@ class MainActivity : ComponentActivity() {
                     if(context.isAccessibilityServiceEnabled(GestionUso::class.java))
                     {
                         //En caso de que se haya concedido se pidel el resto de permisos
-                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                            permissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                        if(Build.VERSION.SDK_INT >= Build.VERSION_CODES.S)
+                        {
+                            var Permisos = arrayOf<String>()
+
+                            if(ContextCompat.checkSelfPermission(context,Manifest.permission.SCHEDULE_EXACT_ALARM) != PackageManager.PERMISSION_GRANTED)
+                            {
+                                Permisos += Manifest.permission.SCHEDULE_EXACT_ALARM
+                            }
+
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU && ContextCompat.checkSelfPermission(context,Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                                Permisos += Manifest.permission.POST_NOTIFICATIONS
+                            }
+
+                            if(Permisos.isNotEmpty())
+                            {
+                                permissionLauncher.launch(Permisos)
+                            }
                         }
 
                         onEnabled()
@@ -1333,7 +2347,7 @@ class MainActivity : ComponentActivity() {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top=24.dp),
+                        .padding(top = 24.dp),
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     TextButton(onClick = onElegirSitio, modifier = Modifier.weight(1f)) { Text("Sitio web", color = Color.White) }

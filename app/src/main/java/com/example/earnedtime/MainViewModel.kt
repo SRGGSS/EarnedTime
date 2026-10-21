@@ -15,6 +15,7 @@ import com.example.earnedtime.data.DomainEntry
 import com.example.earnedtime.data.GrupoEntry
 import com.example.earnedtime.data.Limite
 import com.example.earnedtime.data.ObjetivoEntry
+import com.example.earnedtime.data.PausaEntry
 import com.example.earnedtime.data.UsageEntry
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.launch
@@ -129,6 +130,7 @@ class MainViewModel : ViewModel() {
     var grupos by mutableStateOf<List<GrupoEntry>>(emptyList())
     var MapaApps = mutableMapOf<String, String>()
 
+    var pausas by mutableStateOf<List<PausaEntry>>(emptyList())
 
     private lateinit var context: Context
     fun Cargar(c: Context)
@@ -171,6 +173,13 @@ class MainViewModel : ViewModel() {
             dao.getGrupos().collect { lista ->
                 lista.forEach { dao.getOrResetLimite(it) }   // Para mantener la lista actualizada
                 grupos = lista
+            }
+        }
+
+        viewModelScope.launch {
+            dao.limpiarPausasCaducadas(System.currentTimeMillis())
+            dao.getPausas().collect { lista ->
+                pausas = lista
             }
         }
 
@@ -239,11 +248,6 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch { AppDatabase.getDatabase(context).mapDAO().setGrupo(g) }
     }
 
-    fun getGrupo(id: Int): GrupoEntry?{
-        var grupo: GrupoEntry? = null
-        viewModelScope.launch { grupo = AppDatabase.getDatabase(context).mapDAO().getGrupo(id) }
-        return grupo
-    }
 
     fun eliminarGrupo(id: Int) {
         viewModelScope.launch { AppDatabase.getDatabase(context).mapDAO().deleteGrupo(id) }
@@ -252,4 +256,53 @@ class MainViewModel : ViewModel() {
     fun usosDeGrupo(id: Int): Flow<List<UsageEntry>> {
         return AppDatabase.getDatabase(context).mapDAO().getEntriesForGroup(id, todayKey())
     }
+
+    fun nuevaPausa(p: PausaEntry) {
+        viewModelScope.launch { AppDatabase.getDatabase(context).mapDAO().setPausa(p) }
+    }
+
+    fun eliminarPausa(id: String) {
+        viewModelScope.launch {
+            AppDatabase.getDatabase(context).mapDAO().deletePausa(id)
+        }
+    }
+
+    fun pausasEspontaneas(): PausaEntry?
+    {
+        viewModelScope.launch {AppDatabase.getDatabase(context).mapDAO().limpiarPausasCaducadas(System.currentTimeMillis())}
+
+        for(i in 0 .. pausas.size-1)
+        {
+            val pausa = pausas.get(i)
+
+            if(!pausa.programada && (pausa.inicioMillis + pausa.duracionMins*60_000)>System.currentTimeMillis())  //Actualmente está en Pausa
+            {
+                return pausa
+
+            }
+        }
+        return null
+    }
+
+    fun gruposDePausa(id: String): List<GrupoEntry>     //Los grupos a los que una pausa afecta
+    {
+        val lista = mutableListOf<GrupoEntry>()
+        val pausa = pausas.firstOrNull { it.id == id } ?: return emptyList()
+
+
+        for(n in 0 .. pausa.grupos.size-1)
+        {
+            val idgrupo = pausa.grupos.get(n)
+
+            val grupo = grupos.firstOrNull { it.id == idgrupo }
+
+            if(grupo != null)
+            {
+               lista.add(grupo)
+            }
+
+        }
+        return lista
+    }
+
 }

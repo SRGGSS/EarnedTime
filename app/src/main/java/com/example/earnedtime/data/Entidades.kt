@@ -53,3 +53,13 @@ data class GrupoEntry(
     @Embedded(prefix = "limite_") var limite: Limite,   //Aplana la tabla
 )
 
+@Entity(tableName = "pausa_entries", primaryKeys = ["id"])
+data class PausaEntry(
+    val id: String,
+    val grupos: List<Int>,                   // ids de los grupos límitados
+    val duracionMins: Int,
+    val programada: Boolean = false,
+    val diasSem: List<Int> = emptyList(),    // 1 a 7 (DayOfWeek.value)
+    val progInicioMins: Int = 0,              // programada: minutos desde medianoche
+    val inicioMillis: Long = 0L              // puntual: instante de inicio
+)

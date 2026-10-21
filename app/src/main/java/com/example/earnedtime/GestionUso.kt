@@ -5,21 +5,21 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
-import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
+import android.widget.Toast
 import androidx.core.content.ContextCompat
 import com.example.earnedtime.data.AppDatabase
 import com.example.earnedtime.data.AppEntry
 import com.example.earnedtime.data.DomainEntry
-import com.example.earnedtime.data.GrupoEntry
 import com.example.earnedtime.data.mapDAO
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.util.Calendar
 import java.util.Date
 import java.util.Locale
 import kotlin.math.pow
@@ -59,8 +59,7 @@ private val PackageAndID = mapOf(
 fun todayKey(): String =  SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
 class GestionUso : AccessibilityService() {
 
-    val TiempoInicialNoti = 15 *60;
-    val NotiManager = NotificationManager() //Se enviarán notificaciones desde aquí
+    val TiempoInicialNoti = 15 *60
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val handler = Handler(Looper.getMainLooper())
     private val dao: mapDAO by lazy { AppDatabase.getDatabase(this).mapDAO() }
@@ -104,11 +103,6 @@ class GestionUso : AccessibilityService() {
             }
         }
 
-        if(!NotiManager.Iniciado)
-        {
-            NotiManager.createNotificationChannel(this)     //Se crea el canal de notificaciones
-        }
-
     }
 
     override fun onDestroy() {
@@ -142,14 +136,6 @@ class GestionUso : AccessibilityService() {
                 }
 
                 if (matchedApp.packageName == currentDomain) return   //Seguimos en la misma
-
-                if (matchedApp.banned) {    //Baneado
-                    closeCurrentSession()
-                    currentDomain = matchedApp.packageName
-                    openTimestamp = System.currentTimeMillis()
-                    blockNow(matchedApp.packageName,0L,false)
-                    return
-                }
 
                 //Si es controlada, no baneada, empezamos a contar
                 openSession(matchedApp.packageName, false, matchedApp.grupo)
@@ -187,15 +173,6 @@ class GestionUso : AccessibilityService() {
             return
         }
 
-        if(matchedDomain.banned)        //Baneada
-        {
-            closeCurrentSession()
-            currentDomain = matchedDomain.domain
-            openTimestamp = System.currentTimeMillis()
-            blockNow(matchedDomain.domain,0L,true)
-            return
-        }
-
 
         //Si es controlado, no baneado, empezamos a contar
         openSession(matchedDomain.domain, true, matchedDomain.grupo)
@@ -223,15 +200,79 @@ class GestionUso : AccessibilityService() {
                 return@launch
             }
             val usado = dao.getTotalSecondsForGroup(idGrupo, today) ?: 0L
-            val remaining = dao.getOrResetLimite(grupo) - usado
+            var remaining = dao.getOrResetLimite(grupo) - usado
+
+            dao.limpiarPausasCaducadas(System.currentTimeMillis())      //Quita las pausas espontaneas pasadas, si las hay
+            val pausasRelevantes = dao.getPausasSingular().filter { idGrupo in it.grupos }  //Coge las pausas que afectan a este grupo
+            var segsHastaPausa: Long? = null
+
+            val now = Calendar.getInstance()
+            val minutos = now.time.hours * 60 + now.time.minutes
+            val hoy = (now.get(Calendar.DAY_OF_WEEK) + 5) % 7 + 1     // para que 1 = lunes y 7 = domingo
+            val ahora = System.currentTimeMillis()
+
+            for(i in 0 .. pausasRelevantes.size-1)  //Para cada pausa
+            {
+                val p = pausasRelevantes[i]
+
+                var Activa = false
+                var hora = ""
+
+                if (!p.programada) {    //Si es espontanea, y no ha sido limpiada, activa la pausa
+
+                    val fin = p.inicioMillis + p.duracionMins * 60_000L
+
+                    if (ahora >= p.inicioMillis && ahora < fin) {   //Compruebo por si acaso
+                        Activa = true
+                        hora = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(fin))
+                    }
+
+                } else {
+
+                    for (dias in -1..6) {   //Va, en las programadas, de anteror a posterior, partiendo de ayer (así coge la activa, y si no hay una pone espera a la más próxima)
+                        val d = Math.floorMod(hoy - 1 + dias, 7) + 1
+                        if (d !in p.diasSem) continue
+
+                        val inicio = dias * 1440 + p.progInicioMins - minutos
+
+                        if (inicio <= 0 && inicio + p.duracionMins > 0) {   //Activa ahora mismo
+                            Activa = true
+                            val finMin = (p.progInicioMins + p.duracionMins) % 1440
+                            hora = "%02d:%02d".format(finMin / 60, finMin % 60)
+                            break
+                        }
+                        if (inicio > 0) {
+                            val segs = inicio * 60L
+                            if (segsHastaPausa == null || segs < segsHastaPausa) segsHastaPausa = segs  //Para el temporizador
+                            break
+                        }
+                    }
+
+                }
+
+                if (Activa) {
+                    val tipo = if (web) "web" else "App"
+                    handler.post {
+                        if (currentDomain != domain) return@post
+                        blockNow(domain, 0L)
+                        Toast.makeText(this@GestionUso, "Esta $tipo está pausada hasta las $hora", Toast.LENGTH_SHORT).show()
+                    }
+                    return@launch
+                }
+            }
 
             handler.post {
                 if (currentDomain != domain) return@post
 
                 if (remaining <= 0) {
-                    blockNow(domain, 0L, web)
+                    blockNow(domain, 0L)
                 }
                 else {
+
+                    if(segsHastaPausa != null)
+                    {
+                        remaining = minOf(remaining, segsHastaPausa)    //Hasta que se acabe el tiempo de uso del grupo o empiece la siguiente pausa programada que lo afecte
+                    }
                     scheduleBlock(domain, remaining, web)
                 }
             }
@@ -240,7 +281,7 @@ class GestionUso : AccessibilityService() {
 
     private fun scheduleBlock(domain: String, remainingSeconds: Long, web: Boolean) {
         cancelPendingBlock()
-        val runnable = Runnable { blockNow(domain, elapsedSeconds = remainingSeconds, web) }
+        val runnable = Runnable { blockNow(domain, elapsedSeconds = remainingSeconds) }
         pendingBlockRunnable = runnable
         handler.postDelayed(runnable, (remainingSeconds) * 1000)
 
@@ -252,11 +293,16 @@ class GestionUso : AccessibilityService() {
         }
     }
 
-    private fun notificationLoop(domain: String,iteracion: Int) {
+    private fun notificationLoop(dominio: String,iteracion: Int) {  //Notificacion de tiempo usado, incremental
         val siguiente = TiempoInicialNoti*2.0.pow(iteracion).toInt()
-        NotiManager.PonerNotificacion(this, domain, (siguiente))
 
-        val notiRunnable = Runnable { notificationLoop( domain,iteracion+1) }
+        val titulo = "Uso de  ${dominio}"
+        val TiempoString = formatTime(siguiente.toLong())
+        val textContent = "Has utilizado ${dominio} durante ${TiempoString.subSequence(0,TiempoString.length-5)}"
+
+        NotificationManager.PonerNotificacion(this, titulo, textContent)
+
+        val notiRunnable = Runnable { notificationLoop( dominio,iteracion+1) }
         notificationRunnable = notiRunnable
         handler.postDelayed(notiRunnable, siguiente.toLong()*1000)    //15m, 30m, 1h...
     }
@@ -281,24 +327,20 @@ class GestionUso : AccessibilityService() {
         serviceScope.launch { dao.persistUsage(domain, today, elapsed) }
     }
 
-    private fun blockNow(domain: String, elapsedSeconds: Long, web: Boolean) {
-        currentDomain = null
+    private fun blockNow(domain: String, elapsedSeconds: Long) {
+
         cancelPendingBlock()
 
-        val today = todayKey()
-        serviceScope.launch { dao.persistUsage(domain, today, elapsedSeconds) }
+        pendingBlockRunnable = Runnable {
+            if (currentDomain == domain) {   // seguimos en lo mismo tras los 4 s
+                currentDomain = null
+                val today = todayKey()
+                serviceScope.launch { dao.persistUsage(domain, today, elapsedSeconds) }
+                performGlobalAction(GLOBAL_ACTION_HOME)
+            }
+        }
+        handler.postDelayed(pendingBlockRunnable!!, 4_000)
 
-        if(web)
-        {
-            //Sale de la página
-            val browserIntent = Intent(Intent.ACTION_VIEW, Uri.parse("http://www.google.com")).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) };
-            startActivity(browserIntent);
-        }
-        else
-        {
-            //Cierra la aplicación
-            performGlobalAction(GLOBAL_ACTION_HOME)
-        }
     }
 
     override fun onInterrupt() {}
