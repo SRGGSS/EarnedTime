@@ -19,9 +19,11 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
+import java.time.LocalTime
 import java.util.Calendar
 import java.util.Date
 import java.util.Locale
+import kotlin.math.min
 import kotlin.math.pow
 
 //Mapa de packetes y las IDs de su URL para los principales navegadores de android
@@ -56,7 +58,13 @@ private val PackageAndID = mapOf(
 
 
 
-fun todayKey(): String =  SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+fun dayKey(haceDias : Int): String  //0 para el de hoy
+{
+    val calendar = Calendar.getInstance()
+    calendar.add(Calendar.DAY_OF_YEAR, -haceDias)  //Para cubrir una semana
+    return  SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(calendar.time)
+}
+
 class GestionUso : AccessibilityService() {
 
     val TiempoInicialNoti = 15 *60
@@ -191,7 +199,7 @@ class GestionUso : AccessibilityService() {
         currentDomain = domain
         openTimestamp = System.currentTimeMillis()
 
-        val today = todayKey()
+        val today = dayKey(0)
 
         serviceScope.launch {
             val grupo = dao.getGrupo(idGrupo)
@@ -323,8 +331,20 @@ class GestionUso : AccessibilityService() {
         val elapsed = (System.currentTimeMillis() - openTimestamp) / 1000
         if (elapsed <= 0) return
 
-        val today = todayKey()
-        serviceScope.launch { dao.persistUsage(domain, today, elapsed) }
+        val segundosHoy = LocalTime.now().toSecondOfDay()   //Si ha cambiado de dia en mitad del scheduled block, para que no te sume todo el uso, solo el correspondiente a hoy
+
+        if(elapsed<segundosHoy) //Todo normal
+        {
+            serviceScope.launch { dao.persistUsage(domain, dayKey(0), elapsed) }
+        }
+        else    //Ha habido cambio de dia en medio del uso
+        {
+            serviceScope.launch {
+                dao.persistUsage(domain, dayKey(0), segundosHoy.toLong())
+                dao.persistUsage(domain, dayKey(1), elapsed - segundosHoy.toLong())
+            }
+        }
+
     }
 
     private fun blockNow(domain: String, elapsedSeconds: Long) {
@@ -334,8 +354,21 @@ class GestionUso : AccessibilityService() {
         pendingBlockRunnable = Runnable {
             if (currentDomain == domain) {   // seguimos en lo mismo tras los 4 s
                 currentDomain = null
-                val today = todayKey()
-                serviceScope.launch { dao.persistUsage(domain, today, elapsedSeconds) }
+                val today = dayKey(0)
+                val segundosHoy = LocalTime.now().toSecondOfDay()   //Si ha cambiado de dia en mitad del scheduled block, para que no te sume todo el uso, solo el correspondiente a hoy
+
+                if(elapsedSeconds<segundosHoy) //Todo normal
+                {
+                    serviceScope.launch { dao.persistUsage(domain, dayKey(0), elapsedSeconds) }
+                }
+                else    //Ha habido cambio de dia en medio del uso
+                {
+                    serviceScope.launch {
+                        dao.persistUsage(domain, dayKey(0), segundosHoy.toLong())
+                        dao.persistUsage(domain, dayKey(1), elapsedSeconds - segundosHoy.toLong())
+                    }
+                }
+
                 performGlobalAction(GLOBAL_ACTION_HOME)
             }
         }

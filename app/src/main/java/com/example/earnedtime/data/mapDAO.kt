@@ -4,7 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
-import com.example.earnedtime.todayKey
+import com.example.earnedtime.dayKey
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -57,8 +57,17 @@ interface mapDAO {
 
 
     // Usos de hoy de los miembros del grupo, flow para sincronización
-    @Query("SELECT u.* FROM usage_entries u INNER JOIN (SELECT domain, MAX(date) AS maxDate FROM usage_entries GROUP BY domain) latest ON u.domain = latest.domain AND u.date = latest.maxDate WHERE u.date >= :d AND ( u.domain IN (SELECT domain FROM dominio_entries WHERE grupo = :i) OR u.domain IN (SELECT packageName FROM app_entries WHERE grupo = :i))")
-    fun getEntriesForGroup(i: Int, d: String): Flow<List<UsageEntry>>
+    @Query("""
+    SELECT u.* 
+    FROM usage_entries u
+    WHERE u.date >= :firstDate AND u.date <= :lastDate
+      AND u.domain IN (
+          SELECT domain FROM dominio_entries WHERE grupo = :i
+          UNION
+          SELECT packageName FROM app_entries WHERE grupo = :i
+      )
+""")
+    fun getEntriesForGroup(i: Int,firstDate: String,lastDate: String): Flow<List<UsageEntry>>
 
     @Query("SELECT SUM(secondsUsed) FROM usage_entries WHERE date = :date AND (domain IN (SELECT domain FROM dominio_entries WHERE grupo = :id) OR domain IN (SELECT packageName FROM app_entries WHERE grupo = :id))") //Revisar: Hacer que coja la posterior, a partir de hoy, no siempre hoy
     suspend fun getTotalSecondsForGroup(id: Int, date: String): Long?
@@ -79,9 +88,8 @@ interface mapDAO {
     @Query("SELECT * FROM usage_entries WHERE domain = :domain ORDER BY date DESC LIMIT 1")
     suspend fun getEntry(domain: String): UsageEntry?
 
-    //Todos los usos, mayor fecha a partir de x (normalmente la de hoy, en caso de que hayan usos con mayores fechas se utilizarán esos)
-    @Query("SELECT u.* FROM usage_entries u INNER JOIN (SELECT domain, MAX(date) AS maxDate FROM usage_entries GROUP BY domain) latest ON u.domain = latest.domain AND u.date = latest.maxDate WHERE u.date >= :d")
-    fun getALL(d: String): Flow<List<UsageEntry>>
+    @Query("SELECT * FROM usage_entries WHERE date = :d")
+    fun getALL(d: String): List<UsageEntry>
 
 
     @Query("SELECT SUM(secondsUsed) FROM usage_entries WHERE date = :date")
@@ -123,7 +131,7 @@ interface mapDAO {
 
     //Borrar objetivos con fecha límite anterior a hoy
     suspend fun limpiarObjetivosCaducados() {
-        val hoy = todayKey()
+        val hoy = dayKey(0)
         getObjetivosOnce().forEach { obj ->
             if (obj.fechaLimite.isNotBlank() && hoy > obj.fechaLimite) {
                 deleteObjetivo(obj.id)
@@ -144,7 +152,7 @@ interface mapDAO {
 
     //Si el último límite no es actual se resetea
     suspend fun getOrResetLimite(grupo: GrupoEntry): Long {
-        val hoy = todayKey()
+        val hoy = dayKey(0)
         if (grupo.limite.date < hoy) {
             val nuevo = grupo.copy(limite = grupo.limite.copy(LimiteActualSegs = grupo.limite.LimiteBaseSegs, date = hoy))
             setGrupo(nuevo)

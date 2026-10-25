@@ -5,7 +5,11 @@ import kotlinx.coroutines.launch
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo.FEEDBACK_ALL_MASK
 import android.app.AlarmManager
+import android.app.AppOpsManager
+import android.os.Process
 import android.app.PendingIntent
+import androidx.activity.viewModels
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -22,6 +26,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
@@ -40,6 +45,8 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.DateRange
@@ -73,15 +80,23 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleResumeEffect
+import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.lifecycle.repeatOnLifecycle
+import androidx.lifecycle.viewModelScope
 import com.commandiron.wheel_picker_compose.WheelTimePicker
 import com.commandiron.wheel_picker_compose.core.WheelPickerDefaults
 import com.example.earnedtime.data.AppEntry
@@ -90,12 +105,18 @@ import com.example.earnedtime.data.GrupoEntry
 import com.example.earnedtime.data.Limite
 import com.example.earnedtime.data.ObjetivoEntry
 import com.example.earnedtime.data.PausaEntry
+import com.example.earnedtime.data.UsageEntry
 import com.example.earnedtime.ui.theme.EarnedTimeTheme
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
+import org.intellij.lang.annotations.JdkConstants
 import java.time.LocalTime
+import java.util.Calendar
 import java.util.UUID
+import kotlin.math.abs
+import kotlin.math.max
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.nanoseconds
 import kotlin.time.DurationUnit
@@ -152,7 +173,8 @@ fun formatTime(totalSeconds: Long): String {
 }
 class MainActivity : ComponentActivity() {
 
-    val viewModel = MainViewModel()
+    val viewModel: MainViewModel by viewModels()
+
 
     enum class Pantalla(val icono: Int) {
         Sitios( R.drawable.ajustes),
@@ -178,7 +200,7 @@ class MainActivity : ComponentActivity() {
 
             LaunchedEffect(Unit)
             {
-                viewModel.Cargar(context)
+                viewModel.Cargar()
 
                 apps = withContext(Dispatchers.IO) { listarAppsInstaladas(context) }    //Se pide nada más abrir la aplicación
             }
@@ -385,7 +407,7 @@ class MainActivity : ComponentActivity() {
     @Composable
     fun TarjetaObjetivo(objetivo: ObjetivoEntry, OnEditar: () -> Unit, OnEliminar: () -> Unit)
     {
-        val hoy = todayKey()
+        val hoy = dayKey(0)
 
         val usoDiarioHoy = if (objetivo.dateCompletado == hoy) objetivo.usoDiario else 0
         val completadoHoy = objetivo.LimiteDiario > 0 && usoDiarioHoy >= objetivo.LimiteDiario
@@ -395,7 +417,7 @@ class MainActivity : ComponentActivity() {
 
         val bloqueado = completadoHoy || completadoEstaSem
 
-        val color = Colores[objetivo.grupo % Colores.size]
+        val color = ColorGrupos(objetivo.grupo)
 
             Row(
                 modifier = Modifier
@@ -716,11 +738,24 @@ class MainActivity : ComponentActivity() {
     fun NotebookListCard(
         modifier: Modifier = Modifier,
         color:  Color,
+        haceDias: Int,
         grupo: GrupoEntry
     ) {
 
+        var Usages by remember { mutableStateOf<List<UsageEntry>>(emptyList()) }
 
-        val Usages by viewModel.usosDeGrupo(grupo.id).collectAsState(initial = emptyList())     //Pendiente: A lo mejor (?), no mostrar solo usos, si no dominios y su tiempo actual
+        LifecycleResumeEffect(grupo.id, haceDias) {   //Para que se actualice cada vez que se reable
+            val job = CoroutineScope(Dispatchers.IO).launch {
+                val result = viewModel.usosDeGrupo(grupo.id)
+                withContext(Dispatchers.Main) {
+                    Usages = result.filter { it.date == dayKey(haceDias) }
+                }
+            }
+
+            onPauseOrDispose {
+                job.cancel()
+            }
+        }
 
         if(Usages.isEmpty()) return
 
@@ -942,46 +977,227 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+
+    fun getUsageStatsForDay(context: Context, haceDias: Int): Long {        ////https://medium.com/@quiro91/show-app-usage-with-usagestatsmanager-d47294537dab
+        val usm = context.getSystemService(USAGE_STATS_SERVICE) as UsageStatsManager
+
+        val cal = Calendar.getInstance().apply {
+            add(Calendar.DAY_OF_YEAR, -haceDias)
+            set(Calendar.HOUR_OF_DAY, 0)
+            set(Calendar.MINUTE, 0)
+            set(Calendar.SECOND, 0)
+            set(Calendar.MILLISECOND, 0)
+        }
+
+        val inicio = cal.timeInMillis
+        cal.add(Calendar.DAY_OF_YEAR, 1)
+        val fin = cal.timeInMillis
+
+        return usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, inicio, fin).filter { it.firstTimeStamp in inicio until fin }.sumOf { it.totalTimeInForeground } / 1000
+    }
+
+
     @Composable
     fun PantallaDesglose(grupos: List<GrupoEntry>) {   //Desglose del consumo de tiempo
 
-        Box(modifier = Modifier.fillMaxSize()) {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(horizontal = 32.dp, vertical = 40.dp), // deja sitio a la sombra
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(20.dp)
-                ) {
-                    items(grupos) {  item ->
-                        NotebookListCard(
-                            color = Colores[item.id % Colores.size],
-                            grupo = item
-                        )
+        var haceDias by remember {mutableStateOf(0)}        //Los datos de, hace cuantos dias se quiere ver?
+        val context = LocalContext.current
+
+        Column(modifier = Modifier.fillMaxSize()) {
+            SelectorDia(
+                onAnterior = { valor -> haceDias = valor },
+                onSiguiente = { valor -> haceDias = valor })
+
+            var usoControlado by remember { mutableLongStateOf(0L) }
+            var usoTotal by remember { mutableLongStateOf(0L) }
+            var difControlado by remember { mutableIntStateOf(0) }    //Diferencia (percentual) con ayer
+            var difTotal by remember { mutableIntStateOf(0) } //Diferencia (percentual) con ayer
+
+            LifecycleResumeEffect(haceDias) {
+                val job = CoroutineScope(Dispatchers.IO).launch {
+                    val result = viewModel.getAllUsages(dayKey(haceDias))
+                    val resultAyer = viewModel.getAllUsages(dayKey(haceDias+1))
+
+                    withContext(Dispatchers.Main) {
+                        usoControlado = result.sumOf { it.secondsUsed }
+
+                        val usoAyer = resultAyer.sumOf { it.secondsUsed }
+                        if(usoAyer>1)
+                        {
+                            difControlado = (100.0 * ((usoControlado.toDouble()/usoAyer.toDouble()) - 1.0)).toInt()
+                        }
+                        else{
+                            difControlado = 0
+                        }
+                    }
+
+                    usoTotal = getUsageStatsForDay(context, haceDias)
+                    val usoTotalAyer = getUsageStatsForDay(context, haceDias +1)
+                    if(usoTotalAyer>1)
+                    {
+                        difTotal = (100.0 * ((usoTotal.toDouble()/usoTotalAyer.toDouble())-1.0)).toInt()
+                    }
+                    else{
+                        difTotal = 0
+                    }
+
+                }
+
+                onPauseOrDispose {
+                    job.cancel()
+                }
+            }
+
+            Column (
+                modifier = Modifier.fillMaxWidth()
+            )
+            {
+                var textoControlado = buildAnnotatedString {    //Para distintos colores en texto
+                    append("Uso controlado: ${formatTime(usoControlado)}")
+
+                    if (difControlado == 0) {
+                        append(" (0%)")
+                    } else {
+                        if (difControlado > 0) {
+                            append(" (")
+                            withStyle(SpanStyle(color = Color.Red))
+                            {
+                                append("▲")
+                            }
+                            append("${abs(difControlado)}%)")
+                        } else {
+                            append(" (")
+                            withStyle(SpanStyle(color = Color.Green))
+                            {
+                                append("▼")
+                            }
+                            append("${abs(difControlado)}%)")
+                        }
+                    }
+                }
+                var textoTotal = buildAnnotatedString {    //Para distintos colores en texto
+                    append("Uso total: ${formatTime(max(usoTotal, usoControlado))}")
+                    if (difTotal == 0) {
+                        append(" (0%)")
+                    } else {
+                        if (difTotal > 0) {
+                            append(" (")
+                            withStyle(SpanStyle(color = lerp(Color.Red,Color.Black, 0.2f)))
+                            {
+                                append("▲")
+                            }
+                            append("${abs(difTotal)}%)")
+                        } else {
+                            append(" (")
+                            withStyle(SpanStyle(color = lerp(Color.Green,Color.Black, 0.2f)))
+                            {
+                                append("▼")
+                            }
+                            append("${abs(difTotal)}%)")
+                        }
                     }
                 }
 
-            FloatingActionButton(   //Botón para acceder al menú de pausa
-                onClick = { mostrarPausa =true },
-                modifier = Modifier
-                    .align(Alignment.BottomEnd)
-                    .padding(horizontal = 16.dp, vertical = 24.dp)
-                    .dropShadow(
-                        shape = CircleShape,
-                        shadow = Shadow(
-                            radius = 7.dp,
-                            spread = 1.dp,
-                            color = Color.White.copy(alpha = 0.2f),
-                            offset = DpOffset(0.dp, 0.dp)
-                        )
+                Text(textoControlado,modifier = Modifier.fillMaxWidth(), color = Color.LightGray, textAlign = TextAlign.Center)
+                Spacer(Modifier.size(8.dp))
+                Text(textoTotal,modifier = Modifier.fillMaxWidth(), color = Color.Gray, textAlign = TextAlign.Center)
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+
+                if(usoControlado>0) //Si no se ha usado ni un segundo de los grupos controlados
+                {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(
+                            horizontal = 32.dp,
+                            vertical = 40.dp
+                        ), // deja sitio a la sombra
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(20.dp)
+                    ) {
+                        items(grupos) { item ->
+                            NotebookListCard(
+                                color = Colores[item.id % Colores.size],
+                                grupo = item,
+                                haceDias = haceDias
+                            )
+                        }
+                    }
+                }
+                else
+                {
+                    Text(
+                        text = "No hay uso registrado este día.",
+                        modifier = Modifier
+                            .align(Alignment.Center)
+                            .padding(24.dp)
                     )
-                    .border(2.dp, color = Color.Black, CircleShape)
-                    .clip(CircleShape),
-                containerColor = Color.White
-            ) {
-                Icon(painterResource(R.drawable.reloj), contentDescription = "Añadir grupo", Modifier.size(38.dp), tint = Color.Black)
+                }
+
+                FloatingActionButton(   //Botón para acceder al menú de pausa
+                    onClick = { mostrarPausa = true },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(horizontal = 16.dp, vertical = 24.dp)
+                        .dropShadow(
+                            shape = CircleShape,
+                            shadow = Shadow(
+                                radius = 7.dp,
+                                spread = 1.dp,
+                                color = Color.White.copy(alpha = 0.2f),
+                                offset = DpOffset(0.dp, 0.dp)
+                            )
+                        )
+                        .border(2.dp, color = Color.Black, CircleShape)
+                        .clip(CircleShape),
+                    containerColor = Color.White
+                ) {
+                    Icon(
+                        painterResource(R.drawable.reloj),
+                        contentDescription = "Añadir grupo",
+                        Modifier.size(38.dp),
+                        tint = Color.Black
+                    )
+                }
             }
         }
 
+    }
+
+    @Composable
+    fun SelectorDia(
+        onAnterior: (Int) -> Unit,
+        onSiguiente: (Int) -> Unit
+    ) {
+        var haceDias by remember {mutableStateOf(0)}
+
+        var texto = when(haceDias){
+                0 -> "Hoy"
+                1 -> "Ayer"
+                else -> dayKey(haceDias)
+        }
+
+
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.Center
+        ) {
+            IconButton(onClick = {onAnterior(++haceDias)}, enabled = (haceDias<9)) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "anterior")
+            }
+            Text(
+                text = texto,
+                modifier = Modifier.widthIn(min = 120.dp),
+                textAlign = TextAlign.Center,
+                fontWeight = FontWeight.SemiBold,
+                fontSize = 18.sp
+            )
+            IconButton(onClick = {onSiguiente(--haceDias)}, enabled = (haceDias>0)) {
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, "siguiente")
+            }
+        }
     }
 
 
@@ -2107,7 +2323,7 @@ class MainActivity : ComponentActivity() {
                                 limite = Limite(
                                     LimiteBaseSegs = base,
                                     LimiteActualSegs = extra,
-                                    date = grupo?.limite?.date ?: todayKey()
+                                    date = grupo?.limite?.date ?: dayKey(0)
                                 )
                             )
                         )
@@ -2247,6 +2463,24 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    private fun checkUsageStatsPermission() : Boolean {     //https://proandroiddev.com/accessing-app-usage-history-in-android-79c3af861ccf Para pedir permiso PACKAGE_USAGE_STATS
+        val appOpsManager = getSystemService(AppCompatActivity.APP_OPS_SERVICE) as AppOpsManager
+        // `AppOpsManager.checkOpNoThrow` is deprecated from Android Q
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            appOpsManager.unsafeCheckOpNoThrow(
+                "android:get_usage_stats",
+                Process.myUid(), packageName
+            )
+        }
+        else {
+            appOpsManager.checkOpNoThrow(
+                "android:get_usage_stats",
+                Process.myUid(), packageName
+            )
+        }
+        return mode == AppOpsManager.MODE_ALLOWED
+    }
+
 
     @Composable
     fun PantallaSinPermiso(onAbrirAjustes: () -> Unit, onEnabled: () -> Unit) {
@@ -2303,6 +2537,13 @@ class MainActivity : ComponentActivity() {
                             if(Permisos.isNotEmpty())
                             {
                                 permissionLauncher.launch(Permisos)
+                            }
+                        }
+
+                        if( !checkUsageStatsPermission() )  //El permiso para acceder al uso total no está otorgado
+                        {
+                            Intent( Settings.ACTION_USAGE_ACCESS_SETTINGS ).apply {
+                                startActivity( this )
                             }
                         }
 

@@ -1,5 +1,6 @@
 package com.example.earnedtime
 
+import android.app.Application
 import android.content.Context
 import android.util.Log
 import androidx.compose.runtime.getValue
@@ -7,6 +8,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.earnedtime.data.AppDatabase
@@ -18,6 +20,7 @@ import com.example.earnedtime.data.ObjetivoEntry
 import com.example.earnedtime.data.PausaEntry
 import com.example.earnedtime.data.UsageEntry
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
 
@@ -70,7 +73,7 @@ fun haPasadoUnLunesDesde(fechaAnteriorStr: String): Boolean {
     val sdf = SimpleDateFormat("yyyy-MM-dd", Locale.getDefault())
 
     val dateAnterior = sdf.parse(fechaAnteriorStr) ?: return false
-    val dateHoy = sdf.parse(todayKey()) ?: return false
+    val dateHoy = sdf.parse(dayKey(0)) ?: return false
     val calAnterior = Calendar.getInstance().apply { time = dateAnterior }
     val calHoy = Calendar.getInstance().apply { time = dateHoy }
 
@@ -119,9 +122,9 @@ fun dateKeyToMillis(dateKey: String): Long? {
         return null
     }
 }
-class MainViewModel : ViewModel() {
-    var dominios by mutableStateOf<List<UsageEntry>>(emptyList())
+class MainViewModel(application: Application) : AndroidViewModel(application) {
 
+    private val context: Context = application.applicationContext
     var dominiosbloqueados by mutableStateOf<List<DomainEntry>>(emptyList())
     var objetivos by mutableStateOf<List<ObjetivoEntry>>(emptyList())
 
@@ -132,17 +135,9 @@ class MainViewModel : ViewModel() {
 
     var pausas by mutableStateOf<List<PausaEntry>>(emptyList())
 
-    private lateinit var context: Context
-    fun Cargar(c: Context)
+    fun Cargar()
     {
-        context = c.applicationContext  //applicationContext para garantizar que se mantiene independientemente de la clase que llama cargar()
         val dao = AppDatabase.getDatabase(context).mapDAO()
-
-        viewModelScope.launch {
-            dao.getALL(todayKey()).collect { lista ->
-                dominios = lista
-            }
-        }
 
         viewModelScope.launch {
             dao.getDomains().collect { lista ->
@@ -222,7 +217,7 @@ class MainViewModel : ViewModel() {
     }
 
     fun completarObjetivo(entry: ObjetivoEntry) {
-        val hoy = todayKey()
+        val hoy = dayKey(0)
 
         val usoDiarioActual = if (entry.dateCompletado == hoy) entry.usoDiario else 0
         val limDiario = entry.LimiteDiario
@@ -253,8 +248,10 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch { AppDatabase.getDatabase(context).mapDAO().deleteGrupo(id) }
     }
 
-    fun usosDeGrupo(id: Int): Flow<List<UsageEntry>> {
-        return AppDatabase.getDatabase(context).mapDAO().getEntriesForGroup(id, todayKey())
+    suspend fun usosDeGrupo(id: Int): List<UsageEntry> {
+
+
+        return AppDatabase.getDatabase(context).mapDAO().getEntriesForGroup(id, dayKey(6), dayKey(0)).first()
     }
 
     fun nuevaPausa(p: PausaEntry) {
@@ -265,6 +262,13 @@ class MainViewModel : ViewModel() {
         viewModelScope.launch {
             AppDatabase.getDatabase(context).mapDAO().deletePausa(id)
         }
+    }
+
+    suspend fun getAllUsages(d : String): List<UsageEntry>
+    {
+
+        return AppDatabase.getDatabase(context).mapDAO().getALL(d)
+
     }
 
     fun pausasEspontaneas(): PausaEntry?
