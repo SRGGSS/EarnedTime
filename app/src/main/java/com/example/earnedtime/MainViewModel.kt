@@ -40,22 +40,17 @@ object BlockeoConfig {
         if (urlBarText.isNullOrEmpty()) return null
         val normalized = urlBarText.lowercase()
 
-        //Contiene
-        val contiene = domains.firstOrNull { normalized.contains(it.domain) }       //Mejora Pendiente: prioridad, para evitar conflictos si múltiples coinciden
-        if(contiene == null) return null
-
 
         //Más garantía que un simple contiene, es una parte completa (evita errores como x.com -> stockx.com)
         val CharsDeInicio = listOf(".", "/", ":", "?", "#")
 
-        val inicio = normalized.indexOf(contiene.domain)
-
-        if(inicio != 0 && !CharsDeInicio.contains(normalized.get(inicio-1).toString())){
-            return null
+        val coincidenciasValidas = domains.filter { valor ->    //Pueden haber múltiples coincidencias (ej: youtube.com y youtube.com/shorts, con distintos tiempos)
+            val inicio = normalized.indexOf(valor.domain)
+            inicio != -1 && (inicio == 0 || CharsDeInicio.contains(normalized.get(inicio - 1).toString()))
         }
 
-
-        return contiene
+        // Envia el más exacto
+        return coincidenciasValidas.maxByOrNull { it.domain.length }
     }
 
     fun matchApp(pkg: String, apps: List<AppEntry>): AppEntry? {

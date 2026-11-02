@@ -2314,7 +2314,7 @@ class MainActivity : ComponentActivity() {
 
 
                         // en caso de que ya hubiera extra de hoy
-                        val extra = grupo?.let { it.limite.LimiteActualSegs } ?: base
+                        val extra = grupo?.let { it.limite.LimiteActualSegs - it.limite.LimiteBaseSegs } ?: 0
 
                         onGuardar(
                             GrupoEntry(
@@ -2322,7 +2322,7 @@ class MainActivity : ComponentActivity() {
                                 nombre = nombre.trim(),
                                 limite = Limite(
                                     LimiteBaseSegs = base,
-                                    LimiteActualSegs = extra,
+                                    LimiteActualSegs = base + extra,
                                     date = grupo?.limite?.date ?: dayKey(0)
                                 )
                             )
