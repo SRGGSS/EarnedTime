@@ -716,17 +716,18 @@ class MainActivity : ComponentActivity() {
     }
 
     val Colores = listOf(   //Colores de grupo, agregar más
-        Color(0xFF3ac4cf),
-        Color(0xFFeb6b21),
-        Color(0xFF89d93f),
-        Color(0xFFe82c6c)
+        Color(0xFFf28c18),
+        Color(0xFF3ae034),
+        Color(0xFF16e0f0),
+        Color(0xFFdb30b1),
+        Color(0xFFe82031),
     )
 
 
     fun Modifier.glow(color: Color, offsetX: Float): Modifier = drawBehind {        //Fondo para contenedores
         drawRect(
             Brush.radialGradient(
-                colors = listOf(lerp(color, Color.LightGray, 0.65f), Color.White),
+                colors = listOf(lerp(color, Color.White, 0.5f), Color.White),
                 center = Offset(offsetX * size.width, 10f),
                 radius = size.width /2
             )
