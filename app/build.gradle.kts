@@ -12,7 +12,7 @@ android {
 
     defaultConfig {
         applicationId = "com.example.earnedtime"
-        minSdk = 24
+        minSdk = 26
         targetSdk = 37
         versionCode = 1
         versionName = "1.0"
@@ -39,7 +39,12 @@ android {
 }
 
 dependencies {
+    implementation(libs.androidx.appcompat)
+    implementation(libs.androidx.compose.animation)
+    implementation(libs.androidx.compose.foundation)
+    implementation(libs.androidx.compose.ui.unit)
     implementation(libs.androidx.core.ktx)
+    implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
     implementation(platform(libs.androidx.compose.bom))
@@ -55,8 +60,15 @@ dependencies {
     debugImplementation(libs.androidx.compose.ui.tooling)
     debugImplementation(libs.androidx.compose.ui.test.manifest)
 
+
     implementation("androidx.room:room-runtime:2.8.4")
     implementation("androidx.room:room-ktx:2.8.4")
+    implementation("dev.chrisbanes.haze:haze:1.7.2")
     ksp("androidx.room:room-compiler:2.8.4")
 
+    // Jetpack Compose Glimmer
+    implementation("androidx.xr.glimmer:glimmer:1.0.0-alpha21")
+
+    //Rueda Reloj
+    implementation("com.github.commandiron:WheelPickerCompose:1.1.11")
 }
